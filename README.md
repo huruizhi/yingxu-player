@@ -1,6 +1,6 @@
-# Player
+# 映序
 
-简洁实用的桌面播放器（macOS 起步）。
+映序是一款简洁沉浸的桌面播放器，以视频播放为中心，支持本地 AI 实时字幕、目录播放列表与片尾跳过（macOS 起步）。
 
 核心特性：
 
@@ -15,7 +15,8 @@
 make setup    # 建虚拟环境、装依赖（需要 Homebrew 的 mpv 提供 libmpv）
 make test     # 运行测试
 make run      # 启动播放器
-make package  # 打包 dist/Player.app（捆绑 libmpv，无需 brew 依赖）
+make package  # 打包 dist/Yingxu.app（显示名称：映序；捆绑 libmpv）
+make install  # 安装并启动到 ~/Applications/Yingxu.app
 ```
 
 依赖说明：`brew install mpv` 提供 libmpv 动态库；首次使用 AI 字幕会自动下载识别模型（默认 small/int8 约 250MB，之后完全离线）。
@@ -41,3 +42,9 @@ make package  # 打包 dist/Player.app（捆绑 libmpv，无需 brew 依赖）
 界面为全幅沉浸式：视频铺满窗口，控制元素为悬浮层，播放中鼠标静止 2.5 秒自动隐藏（悬停在控件上则保持显示）；倍速/音量变化有屏幕 OSD 提示；进度条上的淡蓝色段表示 AI 字幕已转写覆盖的范围。
 
 详细设计见 `docs/design.md`。
+
+## 下载与更新
+
+macOS Apple Silicon 版本可在 [GitHub Releases](https://github.com/huruizhi/yingxu-player/releases) 下载。下载版尚未使用 Apple Developer ID 签名和公证，首次打开时 macOS 可能显示安全确认；从源码安装可运行 `make install`，默认安装到 `~/Applications`。
+
+播放器启动后会在后台检查 GitHub 最新正式版。发现新版本时会提示版本号并提供发布页链接；检查失败不会影响播放，也不会自动替换应用。也可从“帮助 → 检查更新”手动检查。

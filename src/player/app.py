@@ -1,11 +1,19 @@
 """应用入口：python -m player.app [--smoke] [媒体文件|目录]。
 
 --smoke：临时配置 + 自动退出 + 打印 AI 状态，用于打包产物的自动化验证
-（例如 dist/Player.app/Contents/MacOS/Player --smoke 某文件）。
+（例如 dist/Yingxu.app/Contents/MacOS/Yingxu --smoke 某文件）。
 模型可用环境变量 PLAYER_SMOKE_MODEL 覆盖（默认 tiny，避免大下载）。
 """
 
 from __future__ import annotations
+
+if __name__ == "__main__":
+    # PyInstaller reuses the executable for multiprocessing helpers such as
+    # resource_tracker. Divert those helpers before importing Qt/mpv so they
+    # do not initialize another player window.
+    from multiprocessing import freeze_support
+
+    freeze_support()
 
 import os
 import sys
@@ -21,6 +29,57 @@ from player.core.settings import Settings
 from player.core.store import Store
 from player.ui.main_window import MainWindow
 from player.ui.theme import apply_dark_theme
+
+_QT_OPTIONS_WITH_VALUE = {
+    "-display",
+    "-geometry",
+    "-name",
+    "-platform",
+    "-platformpluginpath",
+    "-plugin",
+    "-qmljsdebugger",
+    "-session",
+    "-stylesheet",
+    "-style",
+}
+
+
+def parse_launch_args(argv: list[str]) -> tuple[list[str], bool, Path | None]:
+    """Return Qt arguments, smoke mode, and the first positional media path.
+
+    Launch Services and developer launchers can add switches before a file
+    path. Those switches must not be mistaken for media files.
+    """
+    qt_args = [argv[0]]
+    smoke = False
+    media_path = None
+    positional_only = False
+    skip_value = False
+
+    for arg in argv[1:]:
+        if arg == "--smoke":
+            smoke = True
+            continue
+        if arg == "--" and not positional_only:
+            positional_only = True
+            continue
+        if not positional_only and skip_value:
+            qt_args.append(arg)
+            skip_value = False
+            continue
+        if not positional_only and arg in _QT_OPTIONS_WITH_VALUE:
+            qt_args.append(arg)
+            skip_value = True
+            continue
+        if not positional_only and arg.startswith("-"):
+            qt_args.append(arg)
+            continue
+
+        qt_args.append(arg)
+        if media_path is None:
+            media_path = Path(arg).expanduser()
+
+    return qt_args, smoke, media_path
 
 
 def _apply_surface_format() -> None:
@@ -40,14 +99,30 @@ def _config_paths() -> tuple[Path, Path, Path]:
     return data_dir / "settings.json", data_dir / "state.json", cache_dir / "subtitles"
 
 
+def _app_icon_path() -> Path:
+    """Resolve the app icon in source checkouts and macOS bundles."""
+    relative_path = Path("assets") / "yingxu-icon.png"
+    if hasattr(sys, "_MEIPASS"):
+        bundle_resources = Path(sys.executable).resolve().parents[1] / "Resources"
+        roots = (Path(sys._MEIPASS), bundle_resources)
+    else:
+        roots = (Path(__file__).resolve().parents[2],)
+    return next(
+        (root / relative_path for root in roots if (root / relative_path).is_file()), roots[0] / relative_path
+    )
+
+
 def main() -> int:
-    args = [a for a in sys.argv if a != "--smoke"]
-    smoke = len(args) != len(sys.argv)
+    args, smoke, media_path = parse_launch_args(sys.argv)
     patch_find_library()  # 必须在 mpv 绑定首次加载前生效
     _apply_surface_format()
+    # 保留旧配置命名，升级品牌时不改变现有设置与缓存目录。
     QApplication.setOrganizationName("Player")
     QApplication.setApplicationName("Player")
     app = QApplication(args)
+    from PySide6.QtGui import QIcon
+
+    app.setWindowIcon(QIcon(str(_app_icon_path())))
     apply_dark_theme(app)
 
     if smoke:
@@ -82,8 +157,10 @@ def main() -> int:
         QTimer.singleShot(9500, window.close)
 
     window.show()
-    if len(args) > 1:
-        window.open_path(Path(args[1]))
+    if media_path is not None:
+        window.open_path(media_path)
+    if not smoke:
+        QTimer.singleShot(2500, window.check_for_updates)
 
     return app.exec()
 

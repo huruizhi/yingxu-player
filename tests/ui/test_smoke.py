@@ -33,7 +33,7 @@ def window(tmp_path):
 
 
 def test_window_init(window):
-    assert window.windowTitle() == "Player"
+    assert window.windowTitle() == "映序"
     assert window.playback is not None
     window.close()
 

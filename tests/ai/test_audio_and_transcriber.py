@@ -6,6 +6,7 @@ test_transcriber 用假 STT + 假解码器驱动真实线程，验证调度与�
 
 import time
 import wave
+from threading import Event
 
 import numpy as np
 import pytest
@@ -108,13 +109,14 @@ class FakeDecoder:
     def __init__(self, total=0.0):
         self.total = total
         self.requests: list[tuple[float, float]] = []
+        self.closed = False
 
     def read(self, start, max_seconds):
         self.requests.append((start, max_seconds))
         return np.zeros(int(max_seconds * SAMPLE_RATE), dtype=np.float32)
 
     def close(self):
-        pass
+        self.closed = True
 
 
 class FastTranscriber(Transcriber):
@@ -179,6 +181,35 @@ class TestTranscriber:
         transcriber.stop(timeout=5.0)
         assert time.monotonic() - started < 5.0
         assert not transcriber.is_running()
+
+    def test_stop_can_request_cancellation_without_blocking(self, tmp_path):
+        class SlowLoadBackend(FakeBackend):
+            def __init__(self):
+                super().__init__()
+                self.loading = Event()
+                self.release = Event()
+
+            def ensure_loaded(self, progress=None):
+                self.loading.set()
+                self.release.wait(timeout=2)
+                self.loaded = True
+
+        backend = SlowLoadBackend()
+        transcriber, _, decoder, _, _ = self.make(tmp_path, backend=backend)
+        try:
+            assert backend.loading.wait(timeout=2)
+            started = time.monotonic()
+            transcriber.stop(timeout=0)
+
+            assert time.monotonic() - started < 0.1
+            assert transcriber.is_running()
+            backend.release.set()
+            assert wait_until(lambda: not transcriber.is_running())
+            assert decoder.requests == []
+            assert decoder.closed
+        finally:
+            backend.release.set()
+            transcriber.stop(timeout=2)
 
     def test_error_marks_chunk_covered_and_continues(self, tmp_path):
         class BrokenBackend(FakeBackend):

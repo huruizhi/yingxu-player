@@ -27,13 +27,10 @@ def _parse_srt_time(text: str) -> float:
 
 
 def format_srt_time(t: float) -> str:
-    t = max(0.0, float(t))
-    h = int(t // 3600)
-    m = int(t % 3600 // 60)
-    s = int(t % 60)
-    ms = int(round((t - int(t)) * 1000))
-    if ms == 1000:
-        s, ms = s + 1, 0
+    total_ms = round(max(0.0, float(t)) * 1000)
+    total_seconds, ms = divmod(total_ms, 1000)
+    h, rem = divmod(total_seconds, 3600)
+    m, s = divmod(rem, 60)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
@@ -145,21 +142,23 @@ class SubtitleStore:
     # ---- 缓存 ----
 
     @staticmethod
-    def fingerprint(media_path: Path) -> str:
+    def fingerprint(media_path: Path, profile: str = "") -> str:
         p = Path(media_path)
         try:
             stat = p.stat()
             raw = f"{p.resolve()}|{stat.st_size}|{stat.st_mtime_ns}"
+            if profile:
+                raw += f"|{profile}"
         except OSError:
-            raw = str(p)
+            raw = f"{p}|{profile}" if profile else str(p)
         return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
-    def cache_path(self, media_path: Path) -> Path:
-        return self.cache_dir / f"{self.fingerprint(media_path)}.srt"
+    def cache_path(self, media_path: Path, profile: str = "") -> Path:
+        return self.cache_dir / f"{self.fingerprint(media_path, profile)}.srt"
 
-    def try_load_cache(self, media_path: Path, duration: float) -> bool:
+    def try_load_cache(self, media_path: Path, duration: float, profile: str = "") -> bool:
         """加载该文件的缓存字幕；成功后视整个时长为已覆盖。"""
-        cache = self.cache_path(media_path)
+        cache = self.cache_path(media_path, profile)
         try:
             segments = parse_srt(cache.read_text(encoding="utf-8"))
         except OSError:
@@ -173,11 +172,11 @@ class SubtitleStore:
         self.covered.add(0.0, max(duration, segments[-1].end))
         return True
 
-    def save_cache(self, media_path: Path) -> None:
+    def save_cache(self, media_path: Path, profile: str = "") -> None:
         with self._lock:
             body = to_srt(self._segments)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.cache_path(media_path).write_text(body, encoding="utf-8")
+        self.cache_path(media_path, profile).write_text(body, encoding="utf-8")
 
     def export_srt(self, media_path: Path) -> Path:
         """导出 .srt 到媒体文件旁；重名时用 .ai.srt 避免覆盖既有字幕。"""

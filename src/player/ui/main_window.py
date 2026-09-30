@@ -1,17 +1,21 @@
 """主窗口：组装播放内核、播放列表、AI 字幕、片尾跳过与全部交互。
 
-UI v2：视频全幅铺满，控制元素为悬浮层（顶栏/胶囊控制条/贴底时间轴），
+UI v3：视频全幅铺满，字幕、进度与播放控制收在统一的底部悬浮面板；
 播放中鼠标静止自动隐藏；全屏共用同一套逻辑。
 """
 
 from __future__ import annotations
 
+import json
+import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QShortcut
-from PySide6.QtWidgets import QFileDialog, QMainWindow, QMenu, QToolButton
+from PySide6.QtCore import QSettings, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QKeySequence, QShortcut
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
+from PySide6.QtWidgets import QFileDialog, QMainWindow, QMenu, QMessageBox, QToolButton
 
+from player import __version__
 from player.ai.skip import CreditsSkipper
 from player.ai.subtitles import SubtitleStore
 from player.ai.transcriber import Transcriber
@@ -20,8 +24,10 @@ from player.core.playback import Playback
 from player.core.playlist import LoopMode, Playlist, scan_media_files
 from player.core.settings import AI_MODELS, Settings, SubtitleSource
 from player.core.store import Store
+from player.ui.icons import icon
 from player.ui.overlay_visibility import AutoHideController
 from player.ui.video_area import VideoArea
+from player.updates import LATEST_RELEASE_API, is_newer_version
 
 _TICK_MS = 250
 _PROGRESS_SAVE_TICKS = 20  # ~5 秒落盘一次
@@ -58,6 +64,7 @@ class MainWindow(QMainWindow):
         self._stt: WhisperBackend | None = None
         self._stt_model_size: str | None = None
         self._transcriber: Transcriber | None = None
+        self._transcriber_generation = 0
 
         self._current_file: Path | None = None
         self._ai_active = False
@@ -66,8 +73,12 @@ class MainWindow(QMainWindow):
         self._pending_resume: float | None = None
         self._tick_count = 0
         self._auto_hide = AutoHideController()
+        self._update_manager = QNetworkAccessManager(self)
+        self._update_reply: QNetworkReply | None = None
+        self._update_manual = False
+        self._update_notice: QMessageBox | None = None
 
-        self.setWindowTitle("Player")
+        self.setWindowTitle("映序")
         self.setAcceptDrops(True)
         self._build_ui()
         self._build_menus()
@@ -103,7 +114,10 @@ class MainWindow(QMainWindow):
         self.timeline = self.video_area.timeline
         self.playlist_panel = self.video_area.drawer.panel
         self.volume_slider.setValue(self.settings.volume)
-        QTimer.singleShot(800, lambda: self.video_area.show_osd("拖入视频/音频文件开始播放"))
+        self.video_area.empty_state.open_file.connect(self._open_file_dialog)
+        self.video_area.empty_state.open_directory.connect(self._open_dir_dialog)
+        self.video_area.set_empty_state(True)
+        self.video_area.control_bar.set_paused(self.playback.is_paused())
 
     def _build_menus(self) -> None:
         menu = self.menuBar()
@@ -111,7 +125,7 @@ class MainWindow(QMainWindow):
         # 文件
         m_file = menu.addMenu("文件")
         self.act_open = QAction("打开文件…", self)
-        self.act_open.setShortcut(QKeySequence("Ctrl+O"))
+        self.act_open.setShortcut(QKeySequence.StandardKey.Open)
         self.act_open_dir = QAction("打开目录…", self)
         self.act_open_dir.setShortcut(QKeySequence("Ctrl+Shift+O"))
         self.act_export = QAction("导出 AI 字幕 (.srt)…", self)
@@ -214,6 +228,77 @@ class MainWindow(QMainWindow):
             self._lang_menu.addAction(act)
         self._lang_actions[self.settings.ai_language].setChecked(True)
 
+        m_help = menu.addMenu("帮助")
+        act_updates = QAction("检查更新…", self)
+        act_updates.triggered.connect(lambda: self.check_for_updates(manual=True))
+        m_help.addAction(act_updates)
+
+    def check_for_updates(self, manual: bool = False) -> None:
+        """Check GitHub Releases without blocking video playback."""
+        if self._update_reply is not None:
+            self._update_manual = self._update_manual or manual
+            return
+        self._update_settings = QSettings()
+        last_checked = self._update_settings.value("updates/last_checked", 0, type=int)
+        now = int(time.time())
+        if not manual and now - last_checked < 24 * 60 * 60:
+            return
+        request = QNetworkRequest(QUrl(LATEST_RELEASE_API))
+        request.setRawHeader(b"Accept", b"application/vnd.github+json")
+        request.setRawHeader(b"User-Agent", b"Yingxu-Player")
+        request.setTransferTimeout(5000)
+        self._update_manual = manual
+        self._update_started_at = now
+        self._update_reply = self._update_manager.get(request)
+        self._update_reply.finished.connect(self._on_update_check_finished)
+
+    def _on_update_check_finished(self) -> None:
+        reply = self._update_reply
+        if reply is None:
+            return
+        self._update_reply = None
+        manual = self._update_manual
+        self._update_manual = False
+        if reply.error() != QNetworkReply.NoError:
+            message = reply.errorString()
+            reply.deleteLater()
+            if manual:
+                QMessageBox.warning(self, "检查更新失败", f"暂时无法连接 GitHub：\n{message}")
+            return
+
+        try:
+            release = json.loads(bytes(reply.readAll()).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            release = {}
+        self._update_settings.setValue("updates/last_checked", self._update_started_at)
+        reply.deleteLater()
+
+        latest = str(release.get("tag_name", ""))
+        release_url = str(release.get("html_url", ""))
+        if is_newer_version(latest, __version__) and release_url.startswith("https://github.com/"):
+            self._show_update_notice(latest, release_url)
+        elif manual:
+            QMessageBox.information(self, "检查更新", f"当前已是最新版本（{__version__}）。")
+
+    def _show_update_notice(self, version: str, release_url: str) -> None:
+        if self._update_notice is not None and self._update_notice.isVisible():
+            return
+        notice = QMessageBox(self)
+        notice.setIcon(QMessageBox.Information)
+        notice.setWindowTitle("发现新版本")
+        notice.setText(f"映序 {version} 已发布")
+        notice.setInformativeText(f"当前版本：{__version__}\n查看更新说明并下载最新版本。")
+        download_button = notice.addButton("前往下载", QMessageBox.AcceptRole)
+        notice.addButton("稍后", QMessageBox.RejectRole)
+        notice.setWindowModality(Qt.NonModal)
+        notice.setAttribute(Qt.WA_DeleteOnClose, True)
+        notice.destroyed.connect(lambda: setattr(self, "_update_notice", None))
+        notice.buttonClicked.connect(
+            lambda button: QDesktopServices.openUrl(QUrl(release_url)) if button == download_button else None
+        )
+        self._update_notice = notice
+        notice.open()
+
     def _build_shortcuts(self) -> None:
         def bind(seq: str, slot) -> None:
             sc = QShortcut(QKeySequence(seq), self)
@@ -225,6 +310,7 @@ class MainWindow(QMainWindow):
         bind("Up", lambda: self._change_volume(+5))
         bind("Down", lambda: self._change_volume(-5))
         bind("Ctrl+L", self._toggle_playlist)
+        bind("Ctrl+S", self.skipper.manual_skip)
         bind("Escape", self._exit_fullscreen_if_needed)
 
         self.prev_btn.clicked.connect(lambda: self._play_sibling(-1))
@@ -303,6 +389,10 @@ class MainWindow(QMainWindow):
         fullscreen = self.isFullScreen()
         self.video_area.set_fullscreen(fullscreen)
         self.act_fullscreen.setText("退出全屏" if fullscreen else "进入全屏")
+        self.video_area.control_bar.fullscreen_btn.setIcon(
+            icon("exit_fullscreen" if fullscreen else "fullscreen")
+        )
+        self.video_area.control_bar.fullscreen_btn.setToolTip("退出全屏 (F)" if fullscreen else "全屏 (F)")
         self._auto_hide.force_show()
         self._apply_controls_visibility()
 
@@ -343,13 +433,15 @@ class MainWindow(QMainWindow):
         self._ai_override = None
         self._pending_resume = self.store.get_progress(path)
         self._subtitles_loaded_from_cache = False
+        self.video_area.set_empty_state(False)
+        self.video_area.set_media_title(path.name)
 
         self.subtitles.clear_runtime()
         self.video_area.timeline.set_covered([])
         self.skipper.on_file_opened(path)
         self.playback.load(path)
 
-        self.setWindowTitle(f"{path.name} — Player")
+        self.setWindowTitle(f"{path.name} — 映序")
         self.video_area.status_chip.set_status(None)
         if self.playlist.items:
             self.playlist.jump_to_path(path)  # 文件在列表中时同步当前项
@@ -359,8 +451,6 @@ class MainWindow(QMainWindow):
         self._apply_controls_visibility()
         if self._pending_resume:
             self.video_area.show_osd(f"已恢复到上次进度 {_fmt_time(self._pending_resume)}")
-        else:
-            self.video_area.show_osd(path.name)
 
     def _play_sibling(self, direction: int) -> None:
         nxt = self.playlist.next() if direction > 0 else self.playlist.previous()
@@ -382,12 +472,13 @@ class MainWindow(QMainWindow):
     def _on_file_changed(self, path: str) -> None:
         if not self._current_file or Path(path) != self._current_file.resolve():
             self._current_file = Path(path)
+        self.video_area.control_bar.set_paused(self.playback.is_paused())
         # 载入时轨道信息尚未就绪，先按"无内置字幕"预应用一次；
         # track-list 事件到达后 _on_tracks_changed 会再校正
         self._apply_subtitle_policy()
 
     def _on_paused_changed(self, paused: bool) -> None:
-        self.play_btn.setText("▶" if paused else "⏸")
+        self.video_area.control_bar.set_paused(paused)
         self._auto_hide.force_show()  # 暂停时控制层保持可见
         self._apply_controls_visibility()
 
@@ -413,13 +504,13 @@ class MainWindow(QMainWindow):
         """按设置中的字幕源策略 + 当前文件轨道情况，决定 AI 字幕是否启用。"""
         mode = self.settings.subtitle_source
         has_embedded = bool(self.playback.sub_tracks())
-        if mode is SubtitleSource.FORCE_AI:
-            self.playback.select_sub_track(None)  # 隐藏内置字幕，避免重叠
-        elif mode is SubtitleSource.AUTO:
-            self.playback.reset_sub_track_auto()
         wanted = mode is SubtitleSource.FORCE_AI or (mode is SubtitleSource.AUTO and not has_embedded)
         if self._ai_override is not None:
             wanted = self._ai_override
+        if wanted:
+            self.playback.select_sub_track(None)  # AI 接管时隐藏内置字幕，避免重叠
+        else:
+            self.playback.reset_sub_track_auto()
         self._set_ai_active(wanted)
 
     def _set_ai_active(self, active: bool) -> None:
@@ -437,14 +528,15 @@ class MainWindow(QMainWindow):
 
     def _toggle_ai_manual(self) -> None:
         self._ai_override = not self._ai_active
-        self._set_ai_active(self._ai_override)
+        self._apply_subtitle_policy()
         self.video_area.show_osd("AI 字幕：开启" if self._ai_override else "AI 字幕：关闭")
 
     def _start_ai_transcription(self) -> None:
         if self._current_file is None:
             return
         duration = self.playback.duration() or 0.0
-        if self.subtitles.try_load_cache(self._current_file, duration):
+        cache_profile = self._subtitle_cache_profile()
+        if self.subtitles.try_load_cache(self._current_file, duration, cache_profile):
             self._subtitles_loaded_from_cache = True
             self.video_area.status_chip.set_status("AI 字幕：缓存")
             self.video_area.timeline.set_covered(self.subtitles.covered.ranges())
@@ -460,13 +552,15 @@ class MainWindow(QMainWindow):
         if decoder is None:
             self.video_area.status_chip.set_status("无音频轨")
             return
+        generation = self._transcriber_generation
         self._transcriber = Transcriber(
             self._stt,
             decoder,
             self.subtitles,
             self._current_file,
             duration,
-            on_status=self.transcriber_status.emit,
+            on_status=lambda text: self._emit_transcriber_status(generation, text),
+            cache_profile=cache_profile,
         )
         self._transcriber.start(self.playback.position() or 0.0)
 
@@ -480,10 +574,15 @@ class MainWindow(QMainWindow):
             print(f"[ai] {exc}")
             return None
 
-    def _stop_transcriber(self) -> None:
+    def _stop_transcriber(self, wait_timeout: float = 0.0) -> None:
+        self._transcriber_generation += 1
         if self._transcriber is not None:
-            self._transcriber.stop()
+            self._transcriber.stop(timeout=wait_timeout)
             self._transcriber = None
+
+    def _emit_transcriber_status(self, generation: int, text: str) -> None:
+        if generation == self._transcriber_generation:
+            self.transcriber_status.emit(text)
 
     def _on_transcriber_status(self, text: str) -> None:
         if "转写中" in text or "追赶" in text or "下载" in text or "加载" in text:
@@ -501,16 +600,24 @@ class MainWindow(QMainWindow):
 
     def _set_ai_model(self, size: str) -> None:
         self.settings.ai_model = size
-        if self._transcriber is not None:  # 换模型即重启转写
-            self._stop_transcriber()
-            self.subtitles.clear_runtime()
-            self._stt = None
-            self._start_ai_transcription()
+        self._restart_ai_for_profile_change()
 
     def _set_ai_language(self, lang: str) -> None:
         self.settings.ai_language = lang
-        if self._stt is not None:
-            self._stt.language = lang
+        self._restart_ai_for_profile_change()
+
+    def _subtitle_cache_profile(self) -> str:
+        return f"{self.settings.ai_model}:{self.settings.ai_language}"
+
+    def _restart_ai_for_profile_change(self) -> None:
+        if not self._ai_active:
+            return
+        self._stop_transcriber()
+        self.subtitles.clear_runtime()
+        self._subtitles_loaded_from_cache = False
+        self._stt = None
+        self._stt_model_size = None
+        self._start_ai_transcription()
 
     def _export_srt(self) -> None:
         if self._current_file is None or not self.subtitles.all_segments():
@@ -658,7 +765,9 @@ class MainWindow(QMainWindow):
         self.settings.playlist_mode = mode.value
 
     def _toggle_playlist(self) -> None:
+        was_visible = self.video_area.drawer.isVisible()
         self.video_area.toggle_playlist()
+        self.playlist_btn.setChecked(not was_visible)
 
     def _refresh_playlist_panel(self) -> None:
         self.playlist_panel.populate(self.playlist.items, self.playlist.current_item)
@@ -744,7 +853,7 @@ class MainWindow(QMainWindow):
         self.settings.playlist_mode = self.playlist.mode.value
         self.settings.save()
         self._save_progress_now()
-        self._stop_transcriber()
+        self._stop_transcriber(wait_timeout=8.0)
         self.video_area.mpv_widget.shutdown()
         self.playback.terminate()
         super().closeEvent(event)

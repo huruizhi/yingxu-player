@@ -1,5 +1,9 @@
 """WhisperBackend 语言映射与下载进度回调的单元测试（不加载真实模型）。"""
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
+from time import sleep
+
 import numpy as np
 
 from player.ai.base import Segment
@@ -73,3 +77,34 @@ def pytest_approx(v):
     import pytest
 
     return pytest.approx(v)
+
+
+def test_shared_model_serializes_concurrent_transcriptions():
+    backend = WhisperBackend(model_size="tiny")
+
+    class ConcurrentModel:
+        def __init__(self):
+            self.lock = Lock()
+            self.active = 0
+            self.max_active = 0
+
+        def transcribe(self, pcm, language=None, **kwargs):
+            def generate():
+                with self.lock:
+                    self.active += 1
+                    self.max_active = max(self.max_active, self.active)
+                sleep(0.03)
+                with self.lock:
+                    self.active -= 1
+                yield Segment(0.0, 1.0, "x")
+
+            return generate(), None
+
+    model = ConcurrentModel()
+    backend._model = model
+    pcm = np.zeros(1600, dtype=np.float32)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: backend.transcribe(pcm), range(2)))
+
+    assert len(results) == 2
+    assert model.max_active == 1

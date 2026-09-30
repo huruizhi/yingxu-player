@@ -1,16 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec：打包 macOS .app 并捆绑 libmpv。
+"""PyInstaller spec：打包映序 macOS .app 并捆绑 libmpv。
 
 构建：make package（.venv/bin/python -m PyInstaller packaging/player.spec --noconfirm）
-产物：dist/Player.app
+产物：dist/Yingxu.app（显示名称：映序）
 """
 
 import sys
+import tomllib
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files
 
 ROOT = Path(SPECPATH).parent
+VERSION = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
 sys.path.insert(0, str(ROOT / "src"))
 
 from player.core.libmpv import find_libmpv  # noqa: E402
@@ -23,6 +25,8 @@ print(f"bundling libmpv: {libmpv}")
 # faster-whisper 的 assets/（silero VAD onnx）必须打包，否则 .app 内 AI 字幕报错
 fw_datas = collect_data_files("faster_whisper")
 print(f"faster_whisper data files: {[src for _, src in fw_datas]}")
+icon_path = ROOT / "assets" / "yingxu.icns"
+fw_datas.append((str(ROOT / "assets" / "yingxu-icon.png"), "assets"))
 
 block_cipher = None
 
@@ -44,7 +48,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="Player",
+    name="Yingxu",
     debug=False,
     strip=False,
     upx=False,
@@ -57,17 +61,18 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=False,
-    name="Player",
+    name="Yingxu",
 )
 app = BUNDLE(
     coll,
-    name="Player.app",
+    name="Yingxu.app",
+    icon=str(icon_path),
     info_plist={
-        "CFBundleName": "Player",
-        "CFBundleDisplayName": "Player",
-        "CFBundleIdentifier": "dev.player.app",
-        "CFBundleShortVersionString": "0.1.0",
-        "CFBundleVersion": "0.1.0",
+        "CFBundleName": "映序",
+        "CFBundleDisplayName": "映序",
+        "CFBundleIdentifier": "dev.yingxu.player",
+        "CFBundleShortVersionString": VERSION,
+        "CFBundleVersion": VERSION,
         "NSHighResolutionCapable": True,
         "LSMinimumSystemVersion": "11.0",
     },

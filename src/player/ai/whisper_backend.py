@@ -7,6 +7,7 @@ ModelLoadError（致命——转写会话应中止而非逐块重试）。
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 
 import numpy as np
@@ -32,29 +33,32 @@ class WhisperBackend(STTBackend):
         self.language = language
         self._model = None
         self._load_error: str | None = None
+        self._model_lock = threading.RLock()
 
     # ---- 模型管理 ----
 
     def is_loaded(self) -> bool:
-        return self._model is not None
+        with self._model_lock:
+            return self._model is not None
 
     def ensure_loaded(self, progress: DownloadProgressFn | None = None) -> None:
-        if self._model is not None:
-            return
-        if self._load_error is not None:  # 已失败过：立即短路，不反复重试
-            raise ModelLoadError(self._load_error)
-        from faster_whisper import WhisperModel
+        with self._model_lock:
+            if self._model is not None:
+                return
+            if self._load_error is not None:  # 已失败过：立即短路，不反复重试
+                raise ModelLoadError(self._load_error)
+            from faster_whisper import WhisperModel
 
-        try:
-            model_path = self._ensure_model_downloaded(progress)
+            try:
+                model_path = self._ensure_model_downloaded(progress)
+                if progress:
+                    progress(None, "正在加载模型…")
+                self._model = WhisperModel(model_path, device="cpu", compute_type="int8")
+            except Exception as exc:
+                self._load_error = self._friendly_error(exc)
+                raise ModelLoadError(self._load_error) from exc
             if progress:
-                progress(None, "正在加载模型…")
-            self._model = WhisperModel(model_path, device="cpu", compute_type="int8")
-        except Exception as exc:
-            self._load_error = self._friendly_error(exc)
-            raise ModelLoadError(self._load_error) from exc
-        if progress:
-            progress(1.0, "模型就绪")
+                progress(1.0, "模型就绪")
 
     @staticmethod
     def _friendly_error(exc: Exception) -> str:
@@ -93,23 +97,24 @@ class WhisperBackend(STTBackend):
     # ---- 转写 ----
 
     def transcribe(self, pcm: np.ndarray, language: str | None = None) -> list[Segment]:
-        if self._model is None:
-            self.ensure_loaded()
-        assert self._model is not None
-        lang = language or (None if self.language in ("auto", "") else self.language)
-        segments, _info = self._model.transcribe(
-            pcm,
-            language=lang,
-            vad_filter=True,
-            beam_size=1,  # 转写速度优先
-            condition_on_previous_text=False,  # 分块转写时避免跨块幻觉
-        )
-        result: list[Segment] = []
-        for s in segments:
-            text = (s.text or "").strip()
-            if text:
-                result.append(Segment(float(s.start), float(s.end), text))
-        return result
+        with self._model_lock:
+            if self._model is None:
+                self.ensure_loaded()
+            assert self._model is not None
+            lang = language or (None if self.language in ("auto", "") else self.language)
+            segments, _info = self._model.transcribe(
+                pcm,
+                language=lang,
+                vad_filter=True,
+                beam_size=1,  # 转写速度优先
+                condition_on_previous_text=False,  # 分块转写时避免跨块幻觉
+            )
+            result: list[Segment] = []
+            for s in segments:
+                text = (s.text or "").strip()
+                if text:
+                    result.append(Segment(float(s.start), float(s.end), text))
+            return result
 
 
 def _progress_tqdm(progress: DownloadProgressFn) -> Callable:

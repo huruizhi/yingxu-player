@@ -35,15 +35,18 @@ class Transcriber:
         media_path: Path,
         duration: float,
         on_status=None,
+        cache_profile: str = "",
     ):
         self._backend = backend
         self._decoder = decoder
         self._subtitles = subtitles
         self._media_path = Path(media_path)
+        self._cache_profile = cache_profile
         self._duration = max(0.0, float(duration))
         self._on_status = on_status or (lambda text: None)
         self._position = 0.0
         self._position_lock = threading.Lock()
+        self._commit_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._done_announced = False
@@ -57,12 +60,15 @@ class Transcriber:
         self._thread.start()
 
     def stop(self, timeout: float = 8.0) -> None:
-        self._stop_event.set()
+        # Serialize cancellation with the short subtitle commit section. After
+        # this lock is released, the worker cannot add results to a new file.
+        with self._commit_lock:
+            self._stop_event.set()
         thread = self._thread
-        if thread is not None and thread.is_alive():
+        if timeout > 0 and thread is not None and thread.is_alive():
             thread.join(timeout=timeout)
-        self._thread = None
-        self._decoder.close()
+        if thread is None or not thread.is_alive():
+            self._thread = None
 
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
@@ -102,19 +108,25 @@ class Transcriber:
             chunk = self.next_chunk(self._subtitles.covered.ranges(), position, self._duration)
             if chunk is None:
                 if not self._done_announced:
-                    self._done_announced = True
-                    try:
-                        self._subtitles.save_cache(self._media_path)
-                    except Exception:
-                        pass
-                    self._status(DONE_STATUS)
+                    with self._commit_lock:
+                        if self._stop_event.is_set():
+                            break
+                        self._done_announced = True
+                        try:
+                            self._subtitles.save_cache(self._media_path, self._cache_profile)
+                        except Exception:
+                            pass
+                        self._status(DONE_STATUS)
                 self._stop_event.wait(self.IDLE_SLEEP * 4)
                 continue
 
-            start, _gap_end = chunk
-            chunk_end = min(start + self.CHUNK, self._duration)
+            start, gap_end = chunk
+            chunk_end = min(start + self.CHUNK, gap_end, self._duration)
             if chunk_end - start < 0.2:  # 尾部极短残余
-                self._subtitles.covered.add(start, chunk_end + 0.01)
+                with self._commit_lock:
+                    if self._stop_event.is_set():
+                        break
+                    self._subtitles.covered.add(start, gap_end)
                 continue
 
             if not self._transcribe_one(start, chunk_end, position):
@@ -128,22 +140,35 @@ class Transcriber:
         """转写单个窗口；成功返回 True。"""
         ctx_start = max(0.0, start - self.CONTEXT)
         try:
+            if self._stop_event.is_set():
+                return False
             self._backend.ensure_loaded(progress=self._status_progress)
+            if self._stop_event.is_set():
+                return False
             pcm = self._decoder.read(ctx_start, chunk_end - ctx_start + 0.5)
+            if self._stop_event.is_set():
+                return False
             segments = self._backend.transcribe(pcm)
         except ModelLoadError as exc:
             # 模型不可用是致命错误：中止会话，保留未转写区间（换模型后可续转）
             self._fatal = str(exc)
-            self._status(self._fatal)
+            if not self._stop_event.is_set():
+                self._status(self._fatal)
             return False
         except Exception as exc:  # 单窗口失败不终止整体
-            self._status(f"转写出错：{exc}")
-            self._subtitles.covered.add(start, chunk_end)  # 跳过问题区间避免死循环
+            with self._commit_lock:
+                if self._stop_event.is_set():
+                    return False
+                self._status(f"转写出错：{exc}")
+                self._subtitles.covered.add(start, chunk_end)  # 跳过问题区间避免死循环
             return False
 
         shifted = [seg.shifted(ctx_start) for seg in segments if seg.start + ctx_start >= start - 0.05]
-        self._subtitles.add_segments(shifted)
-        self._subtitles.covered.add(start, chunk_end)
+        with self._commit_lock:
+            if self._stop_event.is_set():
+                return False
+            self._subtitles.add_segments(shifted)
+            self._subtitles.covered.add(start, chunk_end)
         self._report_progress(position)
         return True
 

@@ -29,7 +29,7 @@ class Segment:
 
 
 class STTBackend(ABC):
-    """语音识别后端接口。实现只需在单个调度线程内被调用。"""
+    """语音识别后端接口；同一实例可能被连续的转写会话共享。"""
 
     name: str = "stt"
 

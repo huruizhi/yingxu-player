@@ -9,10 +9,11 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QLabel, QWidget
 
 from player.core.playback import Playback
 from player.ui.control_bar import ControlBar
+from player.ui.empty_state import EmptyState
 from player.ui.mpv_widget import MpvWidget
 from player.ui.osd import OsdLabel
 from player.ui.playlist_drawer import PlaylistDrawer
@@ -21,7 +22,7 @@ from player.ui.subtitle_overlay import SubtitleOverlay
 from player.ui.timeline_slider import TimelineSlider
 
 _SINGLE_CLICK_MS = 240
-_TIMELINE_H = 22
+_TIMELINE_H = 28
 
 
 class VideoArea(QWidget):
@@ -40,31 +41,56 @@ class VideoArea(QWidget):
         self.mpv_widget.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.subtitle = SubtitleOverlay(self)
         self.status_chip = StatusChip(self)
+        self.media_title = QLabel(self)
+        self.media_title.setObjectName("videoTitle")
+        self.media_title.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.media_title.setVisible(False)
         self.control_bar = ControlBar(self)
-        self.timeline = TimelineSlider(self)
+        self.timeline = TimelineSlider(self.control_bar)
         self.drawer = PlaylistDrawer(self)
         self.osd = OsdLabel(self)
+        self.empty_state = EmptyState(self)
+        self.empty_state.raise_()
 
         self._controls_shown = True
         self._fullscreen = False
         self._last_mouse_pos = None  # 过滤原地重复的 MouseMove（隐藏控制层时的重投递）
 
-    def cursor_over_controls(self) -> bool:
-        """光标悬停在任一控制悬浮层上：此时保持显示（IINA 同款行为）。"""
-        return bool(self.control_bar.underMouse() or self.timeline.underMouse() or self.drawer.underMouse())
         self._click_timer = QTimer(self)
         self._click_timer.setSingleShot(True)
         self._click_timer.setInterval(_SINGLE_CLICK_MS)
         self._click_timer.timeout.connect(self.single_clicked.emit)
 
-        # 子控件鼠标事件也算用户活动
-        for w in (self.control_bar, self.timeline, self.drawer):
-            w.setMouseTracking(True)
-            w.installEventFilter(self)
+        # 子控件鼠标事件也算用户活动。
+        for widget in (self.control_bar, self.timeline, self.drawer):
+            widget.setMouseTracking(True)
+            widget.installEventFilter(self)
 
         self.timeline.scrub_started.connect(self.scrub_started.emit)
         self.timeline.scrub_moved.connect(self.scrub_moved.emit)
         self.timeline.scrub_finished.connect(self.scrub_finished.emit)
+
+    def cursor_over_controls(self) -> bool:
+        """光标悬停在任一控制悬浮层上：此时保持显示（IINA 同款行为）。"""
+        return bool(self.control_bar.underMouse() or self.timeline.underMouse() or self.drawer.underMouse())
+
+    def set_empty_state(self, visible: bool) -> None:
+        self.empty_state.setVisible(visible)
+        self.control_bar.setVisible(not visible and self._controls_shown)
+        self.status_chip.setVisible(not visible and self._controls_shown and bool(self.status_chip.text()))
+        self.media_title.setVisible(not visible and bool(self.media_title.text()))
+        if visible:
+            self.timeline.setVisible(False)
+            self.subtitle.show_text(None)
+        else:
+            self.timeline.setVisible(self._controls_shown)
+        self._place_subtitle()
+        self.empty_state.raise_()
+
+    def set_media_title(self, title: str) -> None:
+        self.media_title.setText(title)
+        self.media_title.adjustSize()
+        self.media_title.setVisible(bool(title) and not self.empty_state.isVisible())
 
     # ---- 显隐 ----
 
@@ -76,8 +102,11 @@ class VideoArea(QWidget):
         if shown == self._controls_shown:
             return
         self._controls_shown = shown
-        for w in (self.status_chip, self.control_bar, self.timeline):
-            w.setVisible(shown)
+        media_visible = not self.empty_state.isVisible()
+        self.status_chip.setVisible(shown and media_visible and bool(self.status_chip.text()))
+        self.media_title.setVisible(media_visible and bool(self.media_title.text()))
+        self.control_bar.setVisible(shown and media_visible)
+        self.timeline.setVisible(shown and media_visible)
         self._place_subtitle()
 
     def set_fullscreen(self, on: bool) -> None:
@@ -92,15 +121,19 @@ class VideoArea(QWidget):
         self._relayout()
         self.drawer.relayout()
         self.osd.reposition()
+        self.empty_state.setGeometry(self.rect())
+        self.empty_state.raise_()
 
     def _relayout(self) -> None:
         w, h = self.width(), self.height()
-        margin = 18 if self._fullscreen else 12
-        self.timeline.setGeometry(0, h - _TIMELINE_H, w, _TIMELINE_H)
-        cw = min(680, max(320, w - 2 * margin - 40))
-        ch = self.control_bar.sizeHint().height()
-        self.control_bar.setGeometry((w - cw) // 2, h - _TIMELINE_H - ch - margin, cw, ch)
-        self.status_chip.move(margin, margin)
+        margin = 24 if self._fullscreen else 20
+        cw = min(900, max(340, w - 2 * margin))
+        ch = self.control_bar.height()
+        self.control_bar.setGeometry((w - cw) // 2, h - ch - margin, cw, ch)
+        self.control_bar.set_compact(w < 690)
+        self.timeline.setGeometry(18, 8, cw - 36, _TIMELINE_H)
+        self.media_title.move(margin, margin)
+        self.status_chip.move(margin, margin + 30)
         self._place_subtitle()
 
     # ---- 字幕 ----
@@ -112,9 +145,9 @@ class VideoArea(QWidget):
 
     def _place_subtitle(self) -> None:
         if self._controls_shown:
-            bottom = _TIMELINE_H + self.control_bar.height() + (18 if self._fullscreen else 12) + 12
+            bottom = self.control_bar.height() + (24 if self._fullscreen else 20) + 16
         else:
-            bottom = 36
+            bottom = 42
         self.subtitle.bottom_margin = bottom
         self.subtitle.reposition()
 

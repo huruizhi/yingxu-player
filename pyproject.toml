@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "player"
 version = "0.1.0"
-description = "简洁实用的桌面播放器：libmpv 内核 + 本地 AI 实时字幕 + 目录播放列表 + 片尾跳过"
+description = "映序：简洁沉浸的桌面播放器，支持本地 AI 实时字幕和目录播放列表"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -17,6 +17,11 @@ dependencies = [
     "faster-whisper>=1.0.0",
     "numpy>=1.26",
 ]
+
+[project.urls]
+Homepage = "https://github.com/huruizhi/yingxu-player"
+Repository = "https://github.com/huruizhi/yingxu-player"
+Changelog = "https://github.com/huruizhi/yingxu-player/blob/master/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [

@@ -13,9 +13,13 @@ class PlaylistPanel(QListWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("playlistPanel")
         self.setUniformItemSizes(True)
-        self.setAlternatingRowColors(True)
+        self.setAlternatingRowColors(False)
         self.setSelectionMode(QListWidget.SingleSelection)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setTextElideMode(Qt.ElideMiddle)
         self.itemActivated.connect(self._on_activated)
         self.itemDoubleClicked.connect(self._on_activated)
 

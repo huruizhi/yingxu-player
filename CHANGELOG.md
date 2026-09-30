@@ -2,15 +2,21 @@
 
 本项目的所有重要变更将记录在此文件中。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [Unreleased]
+## [0.1.0] - 2026-10-01
 
 ### Fixed
 
 - **打包产物 AI 字幕报错**：faster-whisper 的 silero VAD 模型文件未随 .app 分发，现通过 `collect_data_files` 打包，并以 `--smoke` 模式在打包产物内自动验证 AI 全链路。
 - 模型下载失败自动切换 hf-mirror.com 镜像重试；失败信息改为带处置指引的中文提示。
 - 修复控制层自动隐藏与静止光标重投递事件造成的显隐振荡（按光标实际位移过滤）。
+- 播放列表改为自适应半透明面板，隐藏滚动条，自动收起并避开底部进度区域。
 
 ### Added
+
+- GitHub Releases 发布流程：打版本标签后由 GitHub Actions 测试并构建 Apple Silicon macOS 应用包。
+- 启动时后台检查 GitHub 最新版本，并在“帮助”菜单中提供手动检查入口。
+- `make install` 将播放器安装到 `~/Applications/Yingxu.app` 并启动。
+- 测试媒体改为按需生成的本地合成素材，不需要把视频样本提交到仓库。
 
 - **UI v2（参考 Aurora/IINA 设计）**：视频全幅铺满，控制元素悬浮化——底部胶囊控制条（三区布局 + 大圆播放键）、贴底细进度条（时间内嵌两端、AI 已转写区间淡色高亮）、左上角 AI 状态徽标。
 - **全屏模式**：⛶ 按钮 / F 键 / 双击画面进入，Esc 退出；单击画面播放/暂停。

@@ -1,24 +1,34 @@
-"""底部悬浮胶囊控制条：左（AI 字幕）/ 中（大圆播放键组）/ 右（工具）。
-
-三区网格布局，左右两列等比拉伸使中间播放键组始终视觉居中。
-"""
+"""Unified transport panel, with the timeline above the controls."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QSlider, QToolButton, QWidget
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import (
+    QGraphicsDropShadowEffect,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QSlider,
+    QToolButton,
+    QWidget,
+)
 
+from player.ui.icons import icon
 from player.ui.theme import OVERLAY_QSS
 
 
-def _button(text: str, tip: str, checkable: bool = False) -> QToolButton:
-    b = QToolButton()
-    b.setText(text)
-    b.setToolTip(tip)
-    b.setCheckable(checkable)
-    b.setFocusPolicy(Qt.NoFocus)
-    b.setCursor(Qt.PointingHandCursor)
-    return b
+def _button(name: str, tip: str, checkable: bool = False) -> QToolButton:
+    button = QToolButton()
+    button.setIcon(icon(name))
+    button.setIconSize(QSize(20, 20))
+    button.setToolTip(tip)
+    button.setAccessibleName(tip.split(" (")[0])
+    button.setCheckable(checkable)
+    button.setFixedSize(36, 36)
+    button.setFocusPolicy(Qt.TabFocus)
+    button.setCursor(Qt.PointingHandCursor)
+    return button
 
 
 class ControlBar(QWidget):
@@ -28,64 +38,78 @@ class ControlBar(QWidget):
         self.setAttribute(Qt.WA_StyledBackground, True)  # 普通 QWidget 画 QSS 背景必需
         self.setStyleSheet(OVERLAY_QSS)
 
-        # ---- 左区：AI 字幕 ----
+        self.setFixedHeight(112)
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(30)
+        shadow.setOffset(0, 8)
+        shadow.setColor(QColor(0, 0, 0, 150))
+        self.setGraphicsEffect(shadow)
+
         left = QWidget(self)
         left_l = QHBoxLayout(left)
         left_l.setContentsMargins(0, 0, 0, 0)
-        left_l.setSpacing(2)
-        self.subtitle_btn = _button("字", "AI 字幕开关", checkable=True)
-        left_l.addWidget(self.subtitle_btn)
+        left_l.setSpacing(6)
+        self.subtitle_btn = _button("subtitles", "AI 字幕开关", checkable=True)
+        self.speed_btn = QToolButton()
+        self.speed_btn.setObjectName("speedButton")
+        self.speed_btn.setText("1x")
+        self.speed_btn.setFixedSize(46, 36)
+        self.speed_btn.setToolTip("播放速度")
+        self.speed_btn.setAccessibleName("播放速度")
+        self.speed_btn.setCursor(Qt.PointingHandCursor)
+        self.skip_btn = _button("skip", "跳过片尾 (Ctrl+S)")
+        for widget in (self.subtitle_btn, self.speed_btn, self.skip_btn):
+            left_l.addWidget(widget)
 
-        # ---- 中区：主导航（大圆播放键） ----
         center = QWidget(self)
         center_l = QHBoxLayout(center)
         center_l.setContentsMargins(0, 0, 0, 0)
-        center_l.setSpacing(10)
-        self.prev_btn = _button("⏮", "上一个 (Ctrl+[)")
-        self.play_btn = _button("⏸", "播放/暂停 (空格)")
+        center_l.setSpacing(16)
+        self.prev_btn = _button("previous", "上一个 (Ctrl+[)")
+        self.play_btn = _button("play", "播放/暂停 (空格)")
         self.play_btn.setObjectName("playBig")
-        self.next_btn = _button("⏭", "下一个 (Ctrl+])")
-        center_l.addWidget(self.prev_btn, 0, Qt.AlignVCenter)
-        center_l.addWidget(self.play_btn, 0, Qt.AlignVCenter)
-        center_l.addWidget(self.next_btn, 0, Qt.AlignVCenter)
+        self.play_btn.setFixedSize(44, 44)
+        self.play_btn.setIconSize(QSize(24, 24))
+        self.next_btn = _button("next", "下一个 (Ctrl+])")
+        for widget in (self.prev_btn, self.play_btn, self.next_btn):
+            center_l.addWidget(widget, 0, Qt.AlignVCenter)
 
-        # ---- 右区：工具 ----
         right = QWidget(self)
         right_l = QHBoxLayout(right)
         right_l.setContentsMargins(0, 0, 0, 0)
-        right_l.setSpacing(2)
+        right_l.setSpacing(6)
+        self.volume_icon = QLabel()
+        self.volume_icon.setPixmap(icon("volume").pixmap(18, 18))
+        self.volume_icon.setFixedSize(22, 22)
         self.volume_slider = QSlider(Qt.Horizontal)
         self.volume_slider.setRange(0, 130)
-        self.volume_slider.setFixedWidth(76)
-        self.volume_slider.setFocusPolicy(Qt.NoFocus)
+        self.volume_slider.setFixedWidth(68)
         self.volume_slider.setToolTip("音量 (↑/↓)")
-        self.speed_btn = _button("1x", "倍速")
-        self.skip_btn = _button("跳片尾", "跳过片尾 (Ctrl+S)")
-        self.fullscreen_btn = _button("⛶", "全屏 (F)")
-        self.playlist_btn = _button("☰", "播放列表 (Ctrl+L)")
-        for w in (self.volume_slider, self.speed_btn, self.skip_btn, self.fullscreen_btn, self.playlist_btn):
-            right_l.addWidget(w)
+        self.volume_slider.setAccessibleName("音量")
+        self.fullscreen_btn = _button("fullscreen", "全屏 (F)")
+        self.playlist_btn = _button("playlist", "播放列表 (Ctrl+L)", checkable=True)
+        for widget in (self.volume_icon, self.volume_slider, self.playlist_btn, self.fullscreen_btn):
+            right_l.addWidget(widget)
 
-        # ---- 三区网格：左右等比拉伸 → 中间始终居中 ----
         grid = QGridLayout(self)
-        grid.setContentsMargins(16, 5, 14, 5)
-        grid.setHorizontalSpacing(8)
+        grid.setContentsMargins(18, 48, 18, 14)
+        grid.setHorizontalSpacing(12)
         grid.addWidget(left, 0, 0, Qt.AlignLeft | Qt.AlignVCenter)
         grid.addWidget(center, 0, 1, Qt.AlignCenter)
         grid.addWidget(right, 0, 2, Qt.AlignRight | Qt.AlignVCenter)
         grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 0)
         grid.setColumnStretch(2, 1)
+        self._grid = grid
 
-        for w in (
-            self.prev_btn,
-            self.play_btn,
-            self.next_btn,
-            self.speed_btn,
-            self.subtitle_btn,
-            self.skip_btn,
-            self.fullscreen_btn,
-            self.playlist_btn,
-            self.volume_slider,
-        ):
-            w.setFocusPolicy(Qt.NoFocus)
+    def set_paused(self, paused: bool) -> None:
+        self.play_btn.setIcon(icon("play" if paused else "pause", "#14171c"))
+        self.play_btn.setAccessibleName("播放" if paused else "暂停")
+
+    def set_compact(self, compact: bool) -> None:
+        self.volume_slider.setVisible(not compact)
+        self.volume_icon.setVisible(not compact)
+        self.skip_btn.setVisible(not compact)
+        narrow = self.width() < 460
+        self.subtitle_btn.setVisible(not narrow)
+        self.speed_btn.setVisible(not narrow)
+        self._grid.setHorizontalSpacing(6 if narrow else 12)

@@ -1,8 +1,4 @@
-"""深色主题 v2：Fusion 风格 + 暗色调色板 + 悬浮层 QSS。
-
-设计语言：视频全幅铺满，控制元素为半透明深色圆角悬浮层；
-统一 8/12/14px 圆角、无边框、悬停微亮。
-"""
+"""Cool charcoal surfaces, crisp controls, and a quiet playback canvas."""
 
 from __future__ import annotations
 
@@ -10,86 +6,109 @@ from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
 
 # ---- 颜色常量（供自定义控件绘制使用）----
-BG = QColor(30, 30, 32)
-PANEL = QColor(40, 40, 44)
-TEXT = QColor(232, 232, 235)
-TEXT_DIM = QColor(150, 150, 158)
-ACCENT = QColor(77, 141, 246)
-OVERLAY_BG = "rgba(22, 22, 26, 0.80)"  # 悬浮条背景
-OVERLAY_BG_SOLID = QColor(22, 22, 26, 204)
-TRACK_BG = QColor(255, 255, 255, 34)  # 进度条轨道
-COVERED_TINT = QColor(77, 141, 246, 70)  # AI 已转写区间
+BG = QColor(20, 21, 24)
+PANEL = QColor(31, 33, 38)
+TEXT = QColor(237, 239, 244)
+TEXT_DIM = QColor(157, 163, 175)
+ACCENT = QColor(111, 163, 255)
+OVERLAY_BG = "rgba(25, 27, 32, 0.97)"
+OVERLAY_BG_SOLID = QColor(25, 27, 32, 247)
+TRACK_BG = QColor(255, 255, 255, 48)
+COVERED_TINT = QColor(111, 163, 255, 76)
 PLAYED_COLOR = ACCENT
 
 # ---- 应用级样式（菜单/提示）----
 APP_QSS = """
 QMenu {
-    background-color: #232327;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 10px;
-    padding: 6px;
+    background-color: #202228; color: #eceef3;
+    border: 1px solid #353841; border-radius: 10px; padding: 6px;
 }
-QMenu::item { padding: 6px 26px 6px 14px; border-radius: 6px; color: #e8e8eb; }
-QMenu::item:selected { background-color: #4d8df6; color: white; }
-QMenu::separator { height: 1px; background: rgba(255,255,255,0.08); margin: 5px 8px; }
+QMenu::item { padding: 7px 28px 7px 14px; border-radius: 6px; }
+QMenu::item:selected { background-color: #34435d; color: #ffffff; }
+QMenu::separator { height: 1px; background: #383b43; margin: 5px 8px; }
 QToolTip {
-    background-color: #232327; color: #e8e8eb;
-    border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 5px 8px;
+    background-color: #262930; color: #f1f2f5;
+    border: 1px solid #41444d; border-radius: 6px; padding: 5px 8px;
 }
 """
 
 # ---- 悬浮控件样式（按 objectName 作用域）----
 OVERLAY_QSS = """
 QWidget#controlBar {
-    background-color: rgba(22, 22, 26, 0.80);
-    border-radius: 14px;
+    background-color: rgba(25, 27, 32, 0.78);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 18px;
 }
 QWidget#topBar {
-    background-color: rgba(22, 22, 26, 0.80);
-    border-radius: 12px;
+    background-color: rgba(25, 27, 32, 0.94);
+    border: 1px solid #353841; border-radius: 12px;
 }
 QWidget#playlistDrawer {
-    background-color: rgba(20, 20, 24, 0.92);
-    border-radius: 12px;
+    background-color: rgba(25, 27, 32, 0.90);
+    border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 16px;
+}
+QLabel#playlistTitle { color: #f1f2f5; font-size: 15px; font-weight: 600; }
+QLabel#playlistCount { color: #aeb5c2; font-size: 11px; }
+QToolButton#playlistClose {
+    background: transparent; border: 1px solid transparent; border-radius: 8px;
+}
+QToolButton#playlistClose:hover { background: rgba(255, 255, 255, 0.10); }
+QToolButton#playlistClose:pressed { background: rgba(255, 255, 255, 0.16); }
+QToolButton#playlistClose:focus { border-color: #829ac0; }
+QListWidget#playlistPanel {
+    background: transparent; border: none; outline: none;
 }
 QWidget#osdLabel {
-    background-color: rgba(22, 22, 26, 0.85);
-    border-radius: 12px;
+    background-color: #24272e; border: 1px solid #3b3e47; border-radius: 12px;
 }
-QLabel#topTitle { color: #e8e8eb; font-size: 13px; font-weight: 600; }
+QWidget#emptyState { background-color: #141519; }
+QLabel#emptyMark { background-color: #20232a; border: 1px solid #363a44; border-radius: 48px; }
+QLabel#welcomeTitle { color: #f1f2f5; font-size: 27px; font-weight: 600; }
+QLabel#welcomeDescription { color: #a8adba; font-size: 14px; }
+QLabel#welcomeHint { color: #828896; font-size: 12px; }
+QPushButton#openPrimary, QPushButton#openSecondary {
+    min-width: 112px; min-height: 40px; padding: 0 14px; border-radius: 9px;
+    font-size: 13px; font-weight: 600;
+}
+QPushButton#openPrimary { background: #dce8ff; border: 1px solid #dce8ff; color: #1b263a; }
+QPushButton#openPrimary:hover { background: #ffffff; }
+QPushButton#openSecondary { background: #252830; border: 1px solid #41444d; color: #e3e6ed; }
+QPushButton#openSecondary:hover { background: #30333c; }
+QPushButton:focus { border-color: #829ac0; }
+QLabel#videoTitle { color: #f0f1f4; font-size: 14px; font-weight: 600; }
 QLabel#topStatus {
-    color: #9db9e8; font-size: 11px;
-    background: rgba(77, 141, 246, 0.18); border-radius: 8px; padding: 2px 8px;
+    color: #c1d6ff; font-size: 11px;
+    background: #263348; border: 1px solid #354968; border-radius: 8px; padding: 3px 9px;
 }
-QLabel#timeLabel { color: #e8e8eb; font-size: 12px; font-variant-numeric: tabular-nums; }
+QLabel#timeLabel { color: #c7cad2; font-size: 11px; font-variant-numeric: tabular-nums; }
 QToolButton {
-    background: transparent; border: none; border-radius: 8px;
-    color: #e8e8eb; padding: 5px 7px; font-size: 14px;
+    background: transparent; border: 1px solid transparent; border-radius: 10px;
+    color: #e8eaf0; padding: 0; font-size: 13px;
 }
-QToolButton:hover { background: rgba(255, 255, 255, 0.12); }
-QToolButton:pressed { background: rgba(255, 255, 255, 0.18); }
-QToolButton:checked { color: #4d8df6; }
-QToolButton:disabled { color: rgba(232, 232, 235, 0.35); background: transparent; }
+QToolButton:hover { background: #2b2e36; border-color: #3a3e48; }
+QToolButton:pressed { background: #353944; }
+QToolButton:focus { border-color: #829ac0; }
+QToolButton:checked { background: #28364e; border-color: #3b5278; }
+QToolButton:disabled { color: #626874; background: transparent; border-color: transparent; }
 QToolButton::menu-indicator { image: none; width: 0px; height: 0px; }
 QToolButton#playBig {
-    background: rgba(255, 255, 255, 0.16);
-    border-radius: 19px; font-size: 17px; padding: 0px;
-    min-width: 38px; min-height: 38px;
+    background: #dce8ff; border: 1px solid #dce8ff; border-radius: 22px;
 }
-QToolButton#playBig:hover { background: rgba(255, 255, 255, 0.28); }
-QToolButton#playBig:pressed { background: rgba(255, 255, 255, 0.36); }
+QToolButton#playBig:hover { background: #ffffff; border-color: #ffffff; }
+QToolButton#playBig:pressed { background: #c5d9ff; }
+QToolButton#speedButton { color: #d7dae2; font-weight: 600; }
 QSlider { background: transparent; }
-QSlider::groove:horizontal { height: 4px; border-radius: 2px; background: rgba(255,255,255,0.22); }
-QSlider::sub-page:horizontal { height: 4px; border-radius: 2px; background: #4d8df6; }
+QSlider::groove:horizontal { height: 4px; border-radius: 2px; background: #41444d; }
+QSlider::sub-page:horizontal { height: 4px; border-radius: 2px; background: #8ab3ff; }
 QSlider::handle:horizontal {
-    width: 11px; height: 11px; margin: -4px 0; border-radius: 5.5px;
-    background: #ffffff;
+    width: 10px; height: 10px; margin: -3px 0; border-radius: 5px;
+    background: #eff3fb;
 }
 QListWidget {
     background: transparent; border: none; outline: none;
 }
-QListWidget::item { border-radius: 8px; padding: 7px 9px; color: #e8e8eb; }
-QListWidget::item:selected { background: rgba(77, 141, 246, 0.38); }
+QListWidget::item { border-radius: 7px; padding: 7px 10px; color: #e3e5eb; }
+QListWidget::item:selected { background: rgba(84, 132, 196, 0.52); color: #ffffff; }
 QListWidget::item:hover:!selected { background: rgba(255, 255, 255, 0.08); }
 """
 

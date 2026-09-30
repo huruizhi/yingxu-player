@@ -3,7 +3,7 @@ VENV := .venv
 PIP := $(VENV)/bin/pip
 PY := $(VENV)/bin/python
 
-.PHONY: setup lint format test run package clean
+.PHONY: setup lint format test test-fixtures run package install clean
 
 setup:
 	$(PYTHON) -m venv $(VENV)
@@ -21,7 +21,10 @@ format:
 	$(VENV)/bin/black src tests
 	$(VENV)/bin/ruff check --fix src tests
 
-test:
+test-fixtures:
+	$(PY) scripts/generate_test_media.py
+
+test: test-fixtures
 	$(PY) -m pytest
 
 test-cov:
@@ -32,6 +35,12 @@ run:
 
 package:
 	$(PY) -m PyInstaller packaging/player.spec --noconfirm
+
+install: package
+	mkdir -p "$(HOME)/Applications"
+	rm -rf "$(HOME)/Applications/Yingxu.app"
+	ditto dist/Yingxu.app "$(HOME)/Applications/Yingxu.app"
+	open "$(HOME)/Applications/Yingxu.app"
 
 clean:
 	rm -rf build dist .pytest_cache .coverage htmlcov
