@@ -36,6 +36,7 @@ class Settings:
     speed: float = 1.0
     playlist_mode: str = "all"  # LoopMode 的值
     window: dict = field(default_factory=dict)  # 窗口几何 {x,y,w,h,maximized}
+    file_path: Path | None = None  # 持久化位置；None 表示不落盘（测试/临时）
 
     def __post_init__(self):
         if self.ai_model not in AI_MODELS:
@@ -59,9 +60,15 @@ class Settings:
     def load(cls, path: Path) -> "Settings":
         data = load_json(path, {})
         known = {f.name for f in fields(cls)}
-        return cls(**{k: v for k, v in data.items() if k in known})
+        settings = cls(**{k: v for k, v in data.items() if k in known})
+        settings.file_path = Path(path)
+        return settings
 
-    def save(self, path: Path) -> None:
+    def save(self, path: Path | None = None) -> None:
+        target = Path(path) if path is not None else self.file_path
+        if target is None:
+            return
         data = asdict(self)
+        data.pop("file_path", None)
         data["subtitle_source"] = self.subtitle_source.value
-        save_json_atomic(path, data)
+        save_json_atomic(target, data)

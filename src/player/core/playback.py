@@ -48,7 +48,7 @@ class Playback(QObject):
     tracks_changed = Signal()
     end_reached = Signal()
 
-    def __init__(self, parent: QObject | None = None):
+    def __init__(self, parent: QObject | None = None, video_out: str = "libmpv"):
         super().__init__(parent)
         try:
             patch_find_library()  # Homebrew libmpv 不在 ctypes 默认搜索路径
@@ -61,7 +61,7 @@ class Playback(QObject):
         self._tracks: list[Track] = []
         try:
             self._mpv = mpv_module.MPV(
-                vo="libmpv",  # 画面交给渲染上下文，不建独立窗口
+                vo=video_out,  # libmpv=画面交给渲染上下文；null 供无渲染测试
                 hwdec="auto-safe",  # macOS 上自动启用 VideoToolbox 硬解
                 keep_open="yes",  # 播到结尾停在最后一帧，由应用决定连播
                 idle="yes",
@@ -89,8 +89,13 @@ class Playback(QObject):
         return self._mpv
 
     def terminate(self) -> None:
+        """销毁 mpv 句柄；幂等，重复调用安全。"""
+        mpv = getattr(self, "_mpv", None)
+        self._mpv = None
+        if mpv is None:
+            return
         try:
-            self._mpv.terminate()
+            mpv.terminate()
         except Exception:
             pass
 
@@ -147,22 +152,19 @@ class Playback(QObject):
         """加载文件并开始播放。"""
         self._eof = False
         self._mpv.command("loadfile", str(path), "replace")
-        self._mpv.set_property("pause", False)
+        self._set_prop("pause", False)
 
     def stop(self) -> None:
         self._mpv.command("stop")
 
     def play(self) -> None:
-        self._mpv.set_property("pause", False)
+        self._set_prop("pause", False)
 
     def pause(self) -> None:
-        self._mpv.set_property("pause", True)
+        self._set_prop("pause", True)
 
     def toggle_play(self) -> None:
-        try:
-            self._mpv.set_property("pause", not bool(self._mpv.pause))
-        except Exception:
-            pass
+        self._set_prop("pause", not self.is_paused())
 
     def seek_relative(self, seconds: float) -> None:
         self._try(lambda: self._mpv.command("seek", seconds, "relative"))
@@ -172,14 +174,16 @@ class Playback(QObject):
         self._try(lambda: self._mpv.command("seek", seconds, flag))
 
     def set_volume(self, volume: int) -> None:
-        self._mpv.set_property("volume", int(min(130, max(0, volume))))
+        self._set_prop("volume", int(min(130, max(0, volume))))
 
     def set_speed(self, speed: float) -> None:
-        self._try(lambda: self._mpv.set_property("speed", float(speed)))
+        self._set_prop("speed", float(speed))
 
     # ---- 状态查询 ----
 
     def position(self) -> float | None:
+        if self._mpv is None:
+            return None
         try:
             value = self._mpv.time_pos
         except Exception:
@@ -187,6 +191,8 @@ class Playback(QObject):
         return float(value) if value is not None else None
 
     def duration(self) -> float | None:
+        if self._mpv is None:
+            return None
         try:
             value = self._mpv.duration
         except Exception:
@@ -194,12 +200,16 @@ class Playback(QObject):
         return float(value) if value is not None else None
 
     def is_paused(self) -> bool:
+        if self._mpv is None:
+            return True
         try:
             return bool(self._mpv.pause)
         except Exception:
             return True
 
     def media_title(self) -> str:
+        if self._mpv is None:
+            return ""
         try:
             return str(self._mpv.media_title or "")
         except Exception:
@@ -219,18 +229,22 @@ class Playback(QObject):
     # ---- 轨道选择 ----
 
     def select_audio_track(self, track_id: int) -> None:
-        self._try(lambda: self._mpv.set_property("aid", int(track_id)))
+        self._set_prop("aid", int(track_id))
 
     def select_sub_track(self, track_id: int | None) -> None:
         """选择内置字幕轨；None 表示隐藏全部内置字幕（AI 字幕接管）。"""
-        value = "no" if track_id is None else int(track_id)
-        self._try(lambda: self._mpv.set_property("sid", value))
+        self._set_prop("sid", "no" if track_id is None else int(track_id))
 
     def reset_sub_track_auto(self) -> None:
         """恢复 mpv 对内置字幕轨的自动选择。"""
-        self._try(lambda: self._mpv.set_property("sid", "auto"))
+        self._set_prop("sid", "auto")
 
     # ---- 内部 ----
+
+    def _set_prop(self, name: str, value) -> None:
+        """经 `set` 命令写属性：mpv 以字符串解析，兼容 int/float/bool/choice。"""
+        text = "yes" if value is True else "no" if value is False else str(value)
+        self._try(lambda: self._mpv.command("set", name, text))
 
     @staticmethod
     def _try(fn) -> None:

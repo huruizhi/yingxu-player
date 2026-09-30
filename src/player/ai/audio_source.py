@@ -1,11 +1,12 @@
 """PyAV 音频解码：媒体文件 → 16kHz 单声道 float32 PCM，按需分块读取（可 seek）。
 
 供 AI 转写独立于播放管线取音频：不依赖系统混音器，静音播放也能生成字幕。
-仅应在转写线程内使用（非线程安全）。
+read/close 线程安全（内部加锁），保证调度器 stop 时与工作线程的解码不竞态。
 """
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import av
@@ -25,6 +26,8 @@ class AudioDecodeError(RuntimeError):
 
 class AudioDecoder:
     def __init__(self, path: Path):
+        self._lock = threading.Lock()
+        self._closed = False
         try:
             self._container = av.open(str(path))
         except _FFmpegError as exc:
@@ -39,11 +42,14 @@ class AudioDecoder:
     # ---- 查询 ----
 
     def duration(self) -> float:
-        if self._stream.duration is not None and self._stream.time_base:
-            return float(self._stream.duration * self._stream.time_base)
-        if self._container.duration is not None:
-            return float(self._container.duration / av.time_base)
-        return 0.0
+        with self._lock:
+            if self._closed:
+                return 0.0
+            if self._stream.duration is not None and self._stream.time_base:
+                return float(self._stream.duration * self._stream.time_base)
+            if self._container.duration is not None:
+                return float(self._container.duration / av.time_base)
+            return 0.0
 
     # ---- 读取 ----
 
@@ -59,6 +65,12 @@ class AudioDecoder:
         if total == 0:
             return np.zeros(0, dtype=np.float32)
 
+        with self._lock:
+            if self._closed:
+                raise AudioDecodeError("解码器已关闭")
+            return self._read_locked(start, end, total)
+
+    def _read_locked(self, start: float, end: float, total: int) -> np.ndarray:
         tb = self._stream.time_base or av.time_base
         try:
             self._container.seek(int(round(start / tb)), stream=self._stream)
@@ -95,7 +107,11 @@ class AudioDecoder:
         return out
 
     def close(self) -> None:
-        try:
-            self._container.close()
-        except Exception:
-            pass
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            try:
+                self._container.close()
+            except Exception:
+                pass
