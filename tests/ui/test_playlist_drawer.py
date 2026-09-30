@@ -35,9 +35,14 @@ def test_drawer_auto_hides_after_inactivity(qapp, qtbot):
     parent.resize(900, 700)
     parent.control_bar = QWidget(parent)
     parent.control_bar.setGeometry(100, 568, 700, 112)
+    parent.show()
     drawer = PlaylistDrawer(parent)
     drawer._auto_hide.setInterval(40)
+    visibility = []
+    drawer.visibility_changed.connect(visibility.append)
 
     drawer.slide_in()
     assert drawer._auto_hide.isActive()
-    qtbot.waitUntil(lambda: not drawer.isVisible(), timeout=1000)
+    assert visibility == [True]
+    qtbot.waitUntil(lambda: visibility == [True, False], timeout=1000)
+    assert visibility == [True, False]

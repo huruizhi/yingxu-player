@@ -323,6 +323,7 @@ class MainWindow(QMainWindow):
         self.act_mark.triggered.connect(self._mark_credits)
         self.act_clear_mark.triggered.connect(self._clear_credits)
         self.playlist_btn.clicked.connect(self._toggle_playlist)
+        self.video_area.drawer.visibility_changed.connect(self.playlist_btn.setChecked)
         self.video_area.control_bar.fullscreen_btn.clicked.connect(self.toggle_fullscreen)
         self.act_open.triggered.connect(self._open_file_dialog)
         self.act_open_dir.triggered.connect(self._open_dir_dialog)
@@ -765,9 +766,7 @@ class MainWindow(QMainWindow):
         self.settings.playlist_mode = mode.value
 
     def _toggle_playlist(self) -> None:
-        was_visible = self.video_area.drawer.isVisible()
         self.video_area.toggle_playlist()
-        self.playlist_btn.setChecked(not was_visible)
 
     def _refresh_playlist_panel(self) -> None:
         self.playlist_panel.populate(self.playlist.items, self.playlist.current_item)

@@ -118,3 +118,18 @@ def test_auto_hide_hides_controls_when_idle(window, qtbot):
     window._on_mouse_activity()
     assert window.video_area.controls_shown is True
     window.close()
+
+
+def test_playlist_button_unchecks_when_drawer_auto_hides(window, qtbot):
+    window.show()
+    window.open_path(MEDIA / "plain.mkv")
+    drawer = window.video_area.drawer
+    drawer._auto_hide.setInterval(40)
+
+    window.playlist_btn.click()
+    assert drawer.isVisible()
+    assert window.playlist_btn.isChecked()
+
+    qtbot.waitUntil(lambda: not drawer.isVisible(), timeout=1500)
+    assert not window.playlist_btn.isChecked()
+    window.close()

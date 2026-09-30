@@ -27,6 +27,7 @@ from PySide6.QtWidgets import QApplication
 from player.core.libmpv import patch_find_library
 from player.core.settings import Settings
 from player.core.store import Store
+from player.single_instance import SingleInstance
 from player.ui.main_window import MainWindow
 from player.ui.theme import apply_dark_theme
 
@@ -114,6 +115,14 @@ def _app_icon_path() -> Path:
 
 def main() -> int:
     args, smoke, media_path = parse_launch_args(sys.argv)
+    single_instance = None
+    if not smoke:
+        single_instance = SingleInstance("dev.yingxu.player")
+        if not single_instance.is_primary:
+            if single_instance.forward(str(media_path) if media_path is not None else None):
+                return 0
+            raise RuntimeError("映序已在运行，但无法连接到现有进程")
+
     patch_find_library()  # 必须在 mpv 绑定首次加载前生效
     _apply_surface_format()
     # 保留旧配置命名，升级品牌时不改变现有设置与缓存目录。
@@ -142,6 +151,20 @@ def main() -> int:
 
     store = Store(store_path)
     window = MainWindow(settings, store, subtitle_cache)
+
+    if single_instance is not None:
+
+        def handle_secondary_launch(path: str | None) -> None:
+            if window.isMinimized():
+                window.showNormal()
+            else:
+                window.show()
+            window.raise_()
+            window.activateWindow()
+            if path:
+                window.open_path(Path(path))
+
+        single_instance.request_received.connect(handle_secondary_launch)
 
     if smoke:
         window.transcriber_status.connect(lambda text: print(f"[smoke][ai] {text}", flush=True))

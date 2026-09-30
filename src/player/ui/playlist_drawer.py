@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QEasingCurve, QEvent, QPropertyAnimation, QRect, Qt, QTimer
+from PySide6.QtCore import QEasingCurve, QEvent, QPropertyAnimation, QRect, Qt, QTimer, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QToolButton, QVBoxLayout, QWidget
 
 from player.ui.icons import icon
@@ -19,6 +19,8 @@ _AUTO_HIDE_MS = 4000
 
 
 class PlaylistDrawer(QWidget):
+    visibility_changed = Signal(bool)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("playlistDrawer")
@@ -127,6 +129,7 @@ class PlaylistDrawer(QWidget):
         target = self._target_rect(parent)
         self.setGeometry(parent.width(), _MARGIN, target.width(), target.height())  # 屏外起点
         self.setVisible(True)
+        self.visibility_changed.emit(True)
         self._auto_hide.start()
         self._anim.stop()
         self._anim.setStartValue(self.geometry())
@@ -145,7 +148,10 @@ class PlaylistDrawer(QWidget):
         self._anim.start()
 
     def _on_slide_out_done(self) -> None:
+        was_visible = self.isVisible()
         self.setVisible(False)
+        if was_visible:
+            self.visibility_changed.emit(False)
         try:
             self._anim.finished.disconnect(self._on_slide_out_done)
         except TypeError:
