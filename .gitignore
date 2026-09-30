@@ -1,0 +1,24 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# 测试与工具
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# PyInstaller（spec 保留在 packaging/）
+*.spec.tmp
+
+# 系统
+.DS_Store
+
+# 本地测试产物
+tests/fixtures/media/*.mkv
+tests/fixtures/media/*.mp4
+tests/fixtures/media/*.wav
