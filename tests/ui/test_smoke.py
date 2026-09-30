@@ -64,6 +64,7 @@ def test_playback_reaches_playing_state(window, qtbot):
 def test_mark_credits_persists(window, qtbot, tmp_path):
     window.open_path(MEDIA / "plain.mkv")
     qtbot.waitUntil(lambda: window.playback.duration() is not None, timeout=15000)
+    qtbot.waitUntil(lambda: window.playback.position() is not None, timeout=15000)
     window._mark_credits()
     assert window.skipper.has_mark()
     assert window.store.get_credits_start(MEDIA / "plain.mkv") is not None
@@ -94,4 +95,26 @@ def test_subtitle_policy_auto_disables_when_embedded_subs(window, qtbot):
     qtbot.waitUntil(lambda: bool(window.playback.sub_tracks()), timeout=15000)
     qtbot.wait(500)  # 等策略应用
     assert window._ai_active is False  # 有内置字幕 → 不启用 AI
+    window.close()
+
+
+def test_fullscreen_toggle(window, qtbot):
+    window.show()
+    window.toggle_fullscreen()
+    assert window.isFullScreen()
+    assert window.act_fullscreen.text() == "退出全屏"
+    window.toggle_fullscreen()
+    assert not window.isFullScreen()
+    assert window.act_fullscreen.text() == "进入全屏"
+    window.close()
+
+
+def test_auto_hide_hides_controls_when_idle(window, qtbot):
+    window.open_path(MEDIA / "plain.mkv")
+    qtbot.waitUntil(lambda: window.playback.duration() is not None, timeout=15000)
+    window._auto_hide._last_activity -= 10  # 回拨活动时钟模拟长时间无操作
+    window._on_tick()
+    assert window.video_area.controls_shown is False
+    window._on_mouse_activity()
+    assert window.video_area.controls_shown is True
     window.close()

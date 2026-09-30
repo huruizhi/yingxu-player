@@ -12,6 +12,10 @@ import numpy as np
 DownloadProgressFn = Callable[[float | None, str], None]
 
 
+class ModelLoadError(RuntimeError):
+    """模型下载/加载失败（致命：转写会话应中止而非逐块重试）。"""
+
+
 @dataclass(frozen=True)
 class Segment:
     """一条字幕分段：媒体时间轴（秒）+ 文本。"""

@@ -1,11 +1,18 @@
-"""应用入口：python -m player.app [媒体文件|目录]。"""
+"""应用入口：python -m player.app [--smoke] [媒体文件|目录]。
+
+--smoke：临时配置 + 自动退出 + 打印 AI 状态，用于打包产物的自动化验证
+（例如 dist/Player.app/Contents/MacOS/Player --smoke 某文件）。
+模型可用环境变量 PLAYER_SMOKE_MODEL 覆盖（默认 tiny，避免大下载）。
+"""
 
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 from pathlib import Path
 
-from PySide6.QtCore import QStandardPaths
+from PySide6.QtCore import QStandardPaths, QTimer
 from PySide6.QtGui import QSurfaceFormat
 from PySide6.QtWidgets import QApplication
 
@@ -34,21 +41,49 @@ def _config_paths() -> tuple[Path, Path, Path]:
 
 
 def main() -> int:
+    args = [a for a in sys.argv if a != "--smoke"]
+    smoke = len(args) != len(sys.argv)
     patch_find_library()  # 必须在 mpv 绑定首次加载前生效
     _apply_surface_format()
     QApplication.setOrganizationName("Player")
     QApplication.setApplicationName("Player")
-    app = QApplication(sys.argv)
+    app = QApplication(args)
     apply_dark_theme(app)
 
-    settings_path, store_path, subtitle_cache = _config_paths()
-    settings = Settings.load(settings_path)
+    if smoke:
+        tmp = Path(tempfile.mkdtemp(prefix="player_smoke_"))
+        settings = Settings(
+            file_path=tmp / "settings.json",
+            ai_model=os.environ.get("PLAYER_SMOKE_MODEL", "tiny"),
+        )
+        settings_path, store_path, subtitle_cache = (
+            tmp / "settings.json",
+            tmp / "state.json",
+            tmp / "subs",
+        )
+    else:
+        settings_path, store_path, subtitle_cache = _config_paths()
+        settings = Settings.load(settings_path)
+
     store = Store(store_path)
     window = MainWindow(settings, store, subtitle_cache)
-    window.show()
 
-    if len(sys.argv) > 1:
-        window.open_path(Path(sys.argv[1]))
+    if smoke:
+        window.transcriber_status.connect(lambda text: print(f"[smoke][ai] {text}", flush=True))
+
+        def report() -> None:
+            print(
+                f"[smoke] segments={len(window.subtitles.all_segments())} "
+                f"covered={window.subtitles.covered.ranges()}",
+                flush=True,
+            )
+
+        QTimer.singleShot(7000, report)
+        QTimer.singleShot(9500, window.close)
+
+    window.show()
+    if len(args) > 1:
+        window.open_path(Path(args[1]))
 
     return app.exec()
 

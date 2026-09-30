@@ -30,6 +30,7 @@ class SubtitleOverlay(QLabel):
         self.setStyleSheet(_STYLE)
         self.setVisible(False)
         self._shown: str | None = None
+        self.bottom_margin = 36  # 控制层显示时由 VideoArea 调大以避让
 
     def show_text(self, text: str | None) -> None:
         """更新字幕文本；None/空串隐藏。文本变化才重排，避免每帧闪烁。"""
@@ -54,7 +55,7 @@ class SubtitleOverlay(QLabel):
             return
         w = min(self.width(), parent.width())
         x = (parent.width() - w) // 2
-        y = parent.height() - self.height() - 36
+        y = parent.height() - self.height() - self.bottom_margin
         self.setGeometry(max(0, x), max(0, y), w, self.height())
 
     def reposition(self) -> None:

@@ -1,4 +1,8 @@
-"""主窗口：组装播放内核、播放列表、AI 字幕、片尾跳过与全部交互。"""
+"""主窗口：组装播放内核、播放列表、AI 字幕、片尾跳过与全部交互。
+
+UI v2：视频全幅铺满，控制元素为悬浮层（顶栏/胶囊控制条/贴底时间轴），
+播放中鼠标静止自动隐藏；全屏共用同一套逻辑。
+"""
 
 from __future__ import annotations
 
@@ -6,18 +10,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QShortcut
-from PySide6.QtWidgets import (
-    QDockWidget,
-    QFileDialog,
-    QHBoxLayout,
-    QLabel,
-    QMainWindow,
-    QMenu,
-    QSlider,
-    QToolButton,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtWidgets import QFileDialog, QMainWindow, QMenu, QToolButton
 
 from player.ai.skip import CreditsSkipper
 from player.ai.subtitles import SubtitleStore
@@ -27,7 +20,7 @@ from player.core.playback import Playback
 from player.core.playlist import LoopMode, Playlist, scan_media_files
 from player.core.settings import AI_MODELS, Settings, SubtitleSource
 from player.core.store import Store
-from player.ui.playlist_panel import PlaylistPanel
+from player.ui.overlay_visibility import AutoHideController
 from player.ui.video_area import VideoArea
 
 _TICK_MS = 250
@@ -43,27 +36,8 @@ def _fmt_time(seconds: float | None) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
 
 
-class SeekSlider(QSlider):
-    """点击即跳转的进度条。"""
-
-    def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
-        if event.button() == Qt.LeftButton and self.maximum() > self.minimum():
-            ratio = event.position().x() / max(1.0, float(self.width()))
-            value = self.minimum() + round(ratio * (self.maximum() - self.minimum()))
-            self.setValue(value)
-            self.sliderMoved.emit(value)
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
-    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
-        if event.button() == Qt.LeftButton:
-            self.sliderReleased.emit()
-        super().mouseReleaseEvent(event)
-
-
 class MainWindow(QMainWindow):
-    transcriber_status = Signal(str)  # 转写线程状态 → 状态栏（跨线程封送）
+    transcriber_status = Signal(str)  # 转写线程状态 → 顶栏徽标（跨线程封送）
 
     def __init__(
         self,
@@ -90,8 +64,8 @@ class MainWindow(QMainWindow):
         self._ai_override: bool | None = None  # 本次播放的手动开关覆盖
         self._subtitles_loaded_from_cache = False
         self._pending_resume: float | None = None
-        self._scrubbing = False
         self._tick_count = 0
+        self._auto_hide = AutoHideController()
 
         self.setWindowTitle("Player")
         self.setAcceptDrops(True)
@@ -114,78 +88,22 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         self.video_area = VideoArea(self.playback)
+        self.setCentralWidget(self.video_area)
 
-        # ---- 控制栏 ----
-        bar = QWidget()
-        bar_l = QHBoxLayout(bar)
-        bar_l.setContentsMargins(8, 4, 8, 6)
-        bar_l.setSpacing(6)
-
-        def button(text: str, tip: str) -> QToolButton:
-            b = QToolButton()
-            b.setText(text)
-            b.setToolTip(tip)
-            b.setFocusPolicy(Qt.NoFocus)
-            return b
-
-        self.prev_btn = button("⏮", "上一个 (Ctrl+[)")
-        self.play_btn = button("▶", "播放/暂停 (空格)")
-        self.next_btn = button("⏭", "下一个 (Ctrl+])")
-        self.time_label = QLabel("00:00")
-        self.seek_slider = SeekSlider(Qt.Horizontal)
-        self.seek_slider.setRange(0, 0)
-        self.seek_slider.setFocusPolicy(Qt.NoFocus)
-        self.duration_label = QLabel("--:--")
-
-        self.volume_slider = QSlider(Qt.Horizontal)
-        self.volume_slider.setRange(0, 130)
+        # 悬浮控件别名（保持既有逻辑可读）
+        bar = self.video_area.control_bar
+        self.prev_btn = bar.prev_btn
+        self.play_btn = bar.play_btn
+        self.next_btn = bar.next_btn
+        self.volume_slider = bar.volume_slider
+        self.speed_btn = bar.speed_btn
+        self.subtitle_btn = bar.subtitle_btn
+        self.skip_btn = bar.skip_btn
+        self.playlist_btn = bar.playlist_btn
+        self.timeline = self.video_area.timeline
+        self.playlist_panel = self.video_area.drawer.panel
         self.volume_slider.setValue(self.settings.volume)
-        self.volume_slider.setFixedWidth(90)
-        self.volume_slider.setFocusPolicy(Qt.NoFocus)
-        self.volume_slider.setToolTip("音量 (↑/↓)")
-
-        self.speed_btn = button("1.0x", "倍速")
-        self.subtitle_btn = button("字", "AI 字幕开关")
-        self.subtitle_btn.setCheckable(True)
-        self.skip_btn = button("跳过片尾 ⏭", "跳到下一集 (Ctrl+S)")
-        self.mark_btn = button("标记片尾", "把当前位置记为片尾起点 (Ctrl+M)")
-        self.playlist_btn = button("☰ 列表", "播放列表 (Ctrl+L)")
-
-        for w in (
-            self.prev_btn,
-            self.play_btn,
-            self.next_btn,
-            self.time_label,
-            self.seek_slider,
-            self.duration_label,
-            self.volume_slider,
-            self.speed_btn,
-            self.subtitle_btn,
-            self.skip_btn,
-            self.mark_btn,
-            self.playlist_btn,
-        ):
-            bar_l.addWidget(w)
-        bar_l.setStretch(3, 0)
-        bar_l.setStretch(4, 1)
-
-        root = QWidget()
-        root_l = QVBoxLayout(root)
-        root_l.setContentsMargins(0, 0, 0, 0)
-        root_l.setSpacing(0)
-        root_l.addWidget(self.video_area, 1)
-        root_l.addWidget(bar)
-        self.setCentralWidget(root)
-
-        # ---- 播放列表面板 ----
-        self.playlist_panel = PlaylistPanel()
-        self.playlist_dock = QDockWidget("播放列表", self)
-        self.playlist_dock.setWidget(self.playlist_panel)
-        self.playlist_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetClosable)
-        self.addDockWidget(Qt.RightDockWidgetArea, self.playlist_dock)
-        self.playlist_dock.hide()
-
-        self.statusBar().showMessage("拖入视频/音频文件开始播放")
+        QTimer.singleShot(800, lambda: self.video_area.show_osd("拖入视频/音频文件开始播放"))
 
     def _build_menus(self) -> None:
         menu = self.menuBar()
@@ -232,6 +150,11 @@ class MainWindow(QMainWindow):
         except ValueError:
             self.playlist.set_mode(LoopMode.ALL)
         self._loop_actions[self.playlist.mode].setChecked(True)
+        m_play.addSeparator()
+        self.act_fullscreen = QAction("进入全屏", self)
+        self.act_fullscreen.setShortcut(QKeySequence("F"))
+        self.act_fullscreen.triggered.connect(self.toggle_fullscreen)
+        m_play.addAction(self.act_fullscreen)
 
         # 字幕
         m_sub = menu.addMenu("字幕")
@@ -297,11 +220,12 @@ class MainWindow(QMainWindow):
             sc.activated.connect(slot)
 
         bind("Space", self.playback.toggle_play)
-        bind("Left", lambda: self.playback.seek_relative(-10))
-        bind("Right", lambda: self.playback.seek_relative(10))
+        bind("Left", lambda: self._seek_and_feedback(-10))
+        bind("Right", lambda: self._seek_and_feedback(+10))
         bind("Up", lambda: self._change_volume(+5))
         bind("Down", lambda: self._change_volume(-5))
         bind("Ctrl+L", self._toggle_playlist)
+        bind("Escape", self._exit_fullscreen_if_needed)
 
         self.prev_btn.clicked.connect(lambda: self._play_sibling(-1))
         self.next_btn.clicked.connect(lambda: self._play_sibling(+1))
@@ -310,15 +234,22 @@ class MainWindow(QMainWindow):
         self.play_btn.clicked.connect(self.playback.toggle_play)
         self.subtitle_btn.clicked.connect(self._toggle_ai_manual)
         self.skip_btn.clicked.connect(self.skipper.manual_skip)
-        self.mark_btn.clicked.connect(self._mark_credits)
         self.act_mark.triggered.connect(self._mark_credits)
         self.act_clear_mark.triggered.connect(self._clear_credits)
         self.playlist_btn.clicked.connect(self._toggle_playlist)
+        self.video_area.control_bar.fullscreen_btn.clicked.connect(self.toggle_fullscreen)
         self.act_open.triggered.connect(self._open_file_dialog)
         self.act_open_dir.triggered.connect(self._open_dir_dialog)
         self.act_export.triggered.connect(self._export_srt)
         self.playlist_panel.item_activated.connect(self.play_path)
         self.skipper.enabled = self.settings.skip_credits_enabled
+
+        # 视频区交互：单击暂停/播放，双击全屏
+        self.video_area.single_clicked.connect(self.playback.toggle_play)
+        self.video_area.double_clicked.connect(self.toggle_fullscreen)
+        self.video_area.mouse_activity.connect(self._on_mouse_activity)
+        self.video_area.scrub_started.connect(self._auto_hide.force_show)
+        self.video_area.scrub_finished.connect(self._on_scrub_finished)
 
         self.speed_menu = QMenu(self)
         for s in (0.5, 0.75, 1.0, 1.25, 1.5, 2.0):
@@ -336,11 +267,8 @@ class MainWindow(QMainWindow):
         self.playback.end_reached.connect(self._on_end_reached)
         self.playback.file_changed.connect(self._on_file_changed)
 
-        self.seek_slider.sliderPressed.connect(lambda: setattr(self, "_scrubbing", True))
-        self.seek_slider.sliderReleased.connect(self._on_seek_released)
-        self.seek_slider.sliderMoved.connect(lambda v: self.time_label.setText(_fmt_time(v / 1000)))
         self.volume_slider.valueChanged.connect(self._on_volume_changed)
-        self.transcriber_status.connect(lambda text: self.statusBar().showMessage(text, 4000))
+        self.transcriber_status.connect(self._on_transcriber_status)
 
     def _restore_window(self) -> None:
         geo = self.settings.window or {}
@@ -351,7 +279,36 @@ class MainWindow(QMainWindow):
             if geo.get("maximized"):
                 self.showMaximized()
         else:
-            self.resize(960, 600)
+            self.resize(1120, 700)
+
+    # ================= 显隐与全屏 =================
+
+    def _on_mouse_activity(self) -> None:
+        self._auto_hide.activity()
+        self._apply_controls_visibility()
+
+    def _apply_controls_visibility(self) -> None:
+        shown = self._auto_hide.shown
+        self.video_area.set_controls_shown(shown)
+        if self.isFullScreen() and not shown:
+            self.video_area.setCursor(Qt.BlankCursor)
+        else:
+            self.video_area.unsetCursor()
+
+    def toggle_fullscreen(self) -> None:
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
+        fullscreen = self.isFullScreen()
+        self.video_area.set_fullscreen(fullscreen)
+        self.act_fullscreen.setText("退出全屏" if fullscreen else "进入全屏")
+        self._auto_hide.force_show()
+        self._apply_controls_visibility()
+
+    def _exit_fullscreen_if_needed(self) -> None:
+        if self.isFullScreen():
+            self.toggle_fullscreen()
 
     # ================= 打开与播放 =================
 
@@ -361,14 +318,14 @@ class MainWindow(QMainWindow):
         if path.is_dir():
             files = scan_media_files(path)
             if not files:
-                self.statusBar().showMessage("该目录没有可播放的媒体文件", 4000)
+                self.video_area.show_osd("该目录没有可播放的媒体文件")
                 return
             self.playlist.load_directory(path)
             self._refresh_playlist_panel()
             self.play_path(files[0])
             return
         if not path.is_file():
-            self.statusBar().showMessage(f"文件不存在：{path}", 4000)
+            self.video_area.show_osd(f"文件不存在：{path}")
             return
         if not self.playlist.items or path.parent != self.playlist.items[0].parent:
             self.playlist.load_directory(path.parent, start_file=path)
@@ -388,25 +345,29 @@ class MainWindow(QMainWindow):
         self._subtitles_loaded_from_cache = False
 
         self.subtitles.clear_runtime()
+        self.video_area.timeline.set_covered([])
         self.skipper.on_file_opened(path)
         self.playback.load(path)
 
         self.setWindowTitle(f"{path.name} — Player")
+        self.video_area.status_chip.set_status(None)
         if self.playlist.items:
             self.playlist.jump_to_path(path)  # 文件在列表中时同步当前项
         self.playlist_panel.highlight_current(self.playlist.current_item)
         self._update_skip_ui()
+        self._auto_hide.force_show()
+        self._apply_controls_visibility()
         if self._pending_resume:
-            self.statusBar().showMessage(f"已恢复到上次进度 {_fmt_time(self._pending_resume)}", 4000)
+            self.video_area.show_osd(f"已恢复到上次进度 {_fmt_time(self._pending_resume)}")
         else:
-            self.statusBar().showMessage(path.name, 4000)
+            self.video_area.show_osd(path.name)
 
     def _play_sibling(self, direction: int) -> None:
         nxt = self.playlist.next() if direction > 0 else self.playlist.previous()
         if nxt is not None:
             self.play_path(nxt)
         else:
-            self.statusBar().showMessage("播放列表为空", 3000)
+            self.video_area.show_osd("播放列表为空")
 
     def _advance_to_next(self) -> None:
         """片尾跳过/自然播完时的自动连播入口。"""
@@ -414,7 +375,7 @@ class MainWindow(QMainWindow):
         if nxt is not None:
             self.play_path(nxt)
         elif self._current_file is not None:
-            self.statusBar().showMessage("播放结束", 3000)
+            self.video_area.show_osd("播放结束")
 
     # ================= 播放回调 =================
 
@@ -427,10 +388,11 @@ class MainWindow(QMainWindow):
 
     def _on_paused_changed(self, paused: bool) -> None:
         self.play_btn.setText("▶" if paused else "⏸")
+        self._auto_hide.force_show()  # 暂停时控制层保持可见
+        self._apply_controls_visibility()
 
     def _on_duration_changed(self, duration: float) -> None:
-        self.seek_slider.setRange(0, int(duration * 1000))
-        self.duration_label.setText(_fmt_time(duration))
+        self.timeline.set_position(self.playback.position() or 0.0, duration)
         if self._pending_resume and duration > 0:
             pos, self._pending_resume = self._pending_resume, None
             if pos < duration - 5:
@@ -469,12 +431,14 @@ class MainWindow(QMainWindow):
         else:
             self._stop_transcriber()
             self.subtitles.clear_runtime()
+            self.video_area.timeline.set_covered([])
             self.video_area.set_subtitle_text(None)
+            self.video_area.status_chip.set_status(None)
 
     def _toggle_ai_manual(self) -> None:
         self._ai_override = not self._ai_active
         self._set_ai_active(self._ai_override)
-        self.statusBar().showMessage("AI 字幕：开启" if self._ai_override else "AI 字幕：关闭", 3000)
+        self.video_area.show_osd("AI 字幕：开启" if self._ai_override else "AI 字幕：关闭")
 
     def _start_ai_transcription(self) -> None:
         if self._current_file is None:
@@ -482,7 +446,8 @@ class MainWindow(QMainWindow):
         duration = self.playback.duration() or 0.0
         if self.subtitles.try_load_cache(self._current_file, duration):
             self._subtitles_loaded_from_cache = True
-            self.statusBar().showMessage("已加载缓存的 AI 字幕", 4000)
+            self.video_area.status_chip.set_status("AI 字幕：缓存")
+            self.video_area.timeline.set_covered(self.subtitles.covered.ranges())
             return
         if self._transcriber is not None:
             return
@@ -493,7 +458,7 @@ class MainWindow(QMainWindow):
             self._stt_model_size = self.settings.ai_model
         decoder = self._make_decoder(self._current_file)
         if decoder is None:
-            self.statusBar().showMessage("该文件没有音频轨，无法生成 AI 字幕", 4000)
+            self.video_area.status_chip.set_status("无音频轨")
             return
         self._transcriber = Transcriber(
             self._stt,
@@ -520,6 +485,15 @@ class MainWindow(QMainWindow):
             self._transcriber.stop()
             self._transcriber = None
 
+    def _on_transcriber_status(self, text: str) -> None:
+        if "转写中" in text or "追赶" in text or "下载" in text or "加载" in text:
+            self.video_area.status_chip.set_status(text)
+        elif text == "字幕已就绪":
+            self.video_area.status_chip.set_status("AI 字幕：就绪")
+        elif "失败" in text or "出错" in text:
+            self.video_area.status_chip.set_status("AI 字幕：出错")
+            self.video_area.show_osd(text)
+
     def _set_subtitle_source(self, source: SubtitleSource) -> None:
         self.settings.subtitle_source = source
         self._ai_override = None
@@ -540,10 +514,10 @@ class MainWindow(QMainWindow):
 
     def _export_srt(self) -> None:
         if self._current_file is None or not self.subtitles.all_segments():
-            self.statusBar().showMessage("当前文件还没有可导出的 AI 字幕", 4000)
+            self.video_area.show_osd("当前文件还没有可导出的 AI 字幕")
             return
         dest = self.subtitles.export_srt(self._current_file)
-        self.statusBar().showMessage(f"AI 字幕已导出：{dest}", 6000)
+        self.video_area.show_osd(f"AI 字幕已导出：{dest.name}")
 
     # ================= 轨道菜单 =================
 
@@ -602,7 +576,7 @@ class MainWindow(QMainWindow):
         self.store.mark_credits(self._current_file, pos)
         self.skipper.on_file_opened(self._current_file)
         self._update_skip_ui()
-        self.statusBar().showMessage(f"已标记片尾起点 {_fmt_time(pos)}（对同目录文件同样生效）", 6000)
+        self.video_area.show_osd(f"已标记片尾起点 {_fmt_time(pos)}（对同目录文件同样生效）")
 
     def _clear_credits(self) -> None:
         if self._current_file is None:
@@ -610,13 +584,13 @@ class MainWindow(QMainWindow):
         if self.store.clear_credits(self._current_file):
             self.skipper.on_file_opened(self._current_file)
             self._update_skip_ui()
-            self.statusBar().showMessage("已清除片尾标记", 3000)
+            self.video_area.show_osd("已清除片尾标记")
 
     def _toggle_skip_enabled(self, checked: bool) -> None:
         self.settings.skip_credits_enabled = checked
         self.skipper.enabled = checked
         self._update_skip_ui()
-        self.statusBar().showMessage("自动跳过片尾：开" if checked else "自动跳过片尾：关", 3000)
+        self.video_area.show_osd("自动跳过片尾：开" if checked else "自动跳过片尾：关")
 
     def _update_skip_ui(self) -> None:
         has_mark = self._current_file is not None and self.skipper.has_mark()
@@ -630,19 +604,22 @@ class MainWindow(QMainWindow):
     def _on_tick(self) -> None:
         pos = self.playback.position()
         duration = self.playback.duration()
-        if pos is not None and not self._scrubbing:
-            self.seek_slider.blockSignals(True)
-            self.seek_slider.setValue(int(pos * 1000))
-            self.seek_slider.blockSignals(False)
         if pos is not None:
-            self.time_label.setText(_fmt_time(pos))
+            self.timeline.set_position(pos, duration or 0.0)
+            if self._transcriber is not None:
+                self._transcriber.notify_position(pos)
+                self.video_area.timeline.set_covered(self.subtitles.covered.ranges())
+
+        # 自动隐藏判定：悬停控制层视为活动，保持显示
+        if self.video_area.cursor_over_controls():
+            self._auto_hide.activity()
+        elif self._auto_hide.tick(paused=self.playback.is_paused(), fullscreen=self.isFullScreen()):
+            self._apply_controls_visibility()
 
         if self._current_file is None or pos is None:
             return
 
         self._tick_count += 1
-        if self._transcriber is not None:
-            self._transcriber.notify_position(pos)
         seg = self.subtitles.current(pos)
         self.video_area.set_subtitle_text(seg.text if seg else None)
         self.skipper.on_position(pos)
@@ -650,13 +627,20 @@ class MainWindow(QMainWindow):
             self.store.set_progress(self._current_file, pos, duration)
             self.store.save()
 
-    def _on_seek_released(self) -> None:
-        self._scrubbing = False
-        self.playback.seek_absolute(self.seek_slider.value() / 1000, exact=False)
+    def _on_scrub_finished(self, seconds: float) -> None:
+        self.playback.seek_absolute(seconds, exact=False)
+        self._auto_hide.force_show()
+        self._apply_controls_visibility()
+
+    def _seek_and_feedback(self, delta: float) -> None:
+        self.playback.seek_relative(delta)
+        self._auto_hide.force_show()
+        self._apply_controls_visibility()
 
     def _on_volume_changed(self, value: int) -> None:
         self.settings.volume = value
         self.playback.set_volume(value)
+        self.video_area.show_osd(f"音量 {min(value, 100)}%{'+' if value > 100 else ''}")
 
     def _change_volume(self, delta: int) -> None:
         self.volume_slider.setValue(self.volume_slider.value() + delta)
@@ -665,6 +649,7 @@ class MainWindow(QMainWindow):
         self.settings.speed = speed
         self.playback.set_speed(speed)
         self.speed_btn.setText(f"{speed:g}x")
+        self.video_area.show_osd(f"倍速 {speed:g}x")
         for act in self.speed_menu.actions():
             act.setChecked(abs(float(act.text().rstrip("x")) - speed) < 1e-6)
 
@@ -673,7 +658,7 @@ class MainWindow(QMainWindow):
         self.settings.playlist_mode = mode.value
 
     def _toggle_playlist(self) -> None:
-        self.playlist_dock.setVisible(not self.playlist_dock.isVisible())
+        self.video_area.toggle_playlist()
 
     def _refresh_playlist_panel(self) -> None:
         self.playlist_panel.populate(self.playlist.items, self.playlist.current_item)
@@ -730,7 +715,7 @@ class MainWindow(QMainWindow):
         elif dirs:
             self.open_path(dirs[0])
         else:
-            self.statusBar().showMessage("没有可播放的媒体文件", 3000)
+            self.video_area.show_osd("没有可播放的媒体文件")
 
     # ================= 关闭与清理 =================
 
@@ -746,6 +731,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802
         self._tick_timer.stop()
         self.settings.volume = self.volume_slider.value()
+        if self.isFullScreen():
+            self.showNormal()
         geo = self.geometry()
         self.settings.window = {
             "x": geo.x(),

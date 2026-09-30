@@ -148,14 +148,20 @@ class Playback(QObject):
 
     # ---- 加载与基础控制 ----
 
+    def _alive(self) -> bool:
+        return self._mpv is not None
+
     def load(self, path: Path) -> None:
         """加载文件并开始播放。"""
+        if not self._alive():
+            return
         self._eof = False
         self._mpv.command("loadfile", str(path), "replace")
         self._set_prop("pause", False)
 
     def stop(self) -> None:
-        self._mpv.command("stop")
+        if self._alive():
+            self._mpv.command("stop")
 
     def play(self) -> None:
         self._set_prop("pause", False)
@@ -243,6 +249,8 @@ class Playback(QObject):
 
     def _set_prop(self, name: str, value) -> None:
         """经 `set` 命令写属性：mpv 以字符串解析，兼容 int/float/bool/choice。"""
+        if not self._alive():
+            return
         text = "yes" if value is True else "no" if value is False else str(value)
         self._try(lambda: self._mpv.command("set", name, text))
 

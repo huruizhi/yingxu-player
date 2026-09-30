@@ -8,6 +8,8 @@
 import sys
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_data_files
+
 ROOT = Path(SPECPATH).parent
 sys.path.insert(0, str(ROOT / "src"))
 
@@ -18,13 +20,17 @@ if libmpv is None:
     raise SystemExit("未找到 libmpv，请先 brew install mpv")
 print(f"bundling libmpv: {libmpv}")
 
+# faster-whisper 的 assets/（silero VAD onnx）必须打包，否则 .app 内 AI 字幕报错
+fw_datas = collect_data_files("faster_whisper")
+print(f"faster_whisper data files: {[src for _, src in fw_datas]}")
+
 block_cipher = None
 
 a = Analysis(
     [str(ROOT / "src" / "player" / "app.py")],
     pathex=[str(ROOT / "src")],
     binaries=[(libmpv, ".")],
-    datas=[],
+    datas=fw_datas,
     hiddenimports=["mpv"],
     hookspath=[],
     runtime_hooks=[],

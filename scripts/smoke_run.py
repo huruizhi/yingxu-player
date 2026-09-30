@@ -1,7 +1,8 @@
-"""真机冒烟脚本：真实窗口 + GL 渲染，定时自动退出。
+"""真机冒烟/截图脚本：真实窗口 + GL 渲染，多状态截图后自动退出。
 
-用法：python scripts/smoke_run.py [媒体文件]
+用法：python scripts/smoke_run.py [媒体文件] [模型大小]
 用临时目录存配置，不触碰用户真实配置。
+截图时序：2s 窗口(控制层可见) → 5s 控制层自动隐藏 → 6s 进全屏 → 7.5s 全屏截图。
 """
 
 from __future__ import annotations
@@ -47,21 +48,25 @@ def main() -> int:
     if media is not None:
         win.open_path(media)
 
-    def grab() -> None:
-        shot = tmp / "frame.png"
+    def grab(name: str) -> None:
+        shot = tmp / f"{name}.png"
         win.video_area.grab().save(str(shot))
-        print(f"SMOKE: frame saved to {shot}")
-        print(f"SMOKE: segments={len(win.subtitles.all_segments())}")
-        print(f"SMOKE: covered={win.subtitles.covered.ranges()}")
-        t = win._transcriber
-        print(f"SMOKE: transcriber alive={t.is_running() if t else None}")
+        print(f"SMOKE: shot[{name}] -> {shot}", flush=True)
+
+    def grab_hidden() -> None:
+        """确定性截图隐藏态：直接置为隐藏（真实自动隐藏已由单测覆盖）。"""
+        win.video_area.set_controls_shown(False)
+        grab("window_hidden")
 
     def finish() -> None:
         print("SMOKE: closing")
         win.close()
 
-    QTimer.singleShot(7000, grab)
-    QTimer.singleShot(11000, finish)
+    QTimer.singleShot(2000, lambda: grab("window_controls"))
+    QTimer.singleShot(4000, grab_hidden)
+    QTimer.singleShot(5500, win.toggle_fullscreen)
+    QTimer.singleShot(7000, lambda: grab("fullscreen_controls"))
+    QTimer.singleShot(10000, finish)
     rc = app.exec()
     print(f"SMOKE: exit={rc}")
     return rc

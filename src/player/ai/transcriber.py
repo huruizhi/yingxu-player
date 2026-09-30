@@ -13,7 +13,7 @@ import threading
 from pathlib import Path
 
 from player.ai.audio_source import AudioDecoder
-from player.ai.base import STTBackend
+from player.ai.base import ModelLoadError, STTBackend
 from player.ai.subtitles import SubtitleStore, gaps_in_ranges
 
 DONE_STATUS = "字幕已就绪"
@@ -47,6 +47,7 @@ class Transcriber:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._done_announced = False
+        self._fatal: str | None = None
 
     # ---- 生命周期 ----
 
@@ -95,6 +96,8 @@ class Transcriber:
 
     def _run(self) -> None:
         while not self._stop_event.is_set():
+            if self._fatal is not None:
+                break  # 模型不可用等致命错误：保留未转写区间，等待用户处置
             position = self._current_position()
             chunk = self.next_chunk(self._subtitles.covered.ranges(), position, self._duration)
             if chunk is None:
@@ -128,6 +131,11 @@ class Transcriber:
             self._backend.ensure_loaded(progress=self._status_progress)
             pcm = self._decoder.read(ctx_start, chunk_end - ctx_start + 0.5)
             segments = self._backend.transcribe(pcm)
+        except ModelLoadError as exc:
+            # 模型不可用是致命错误：中止会话，保留未转写区间（换模型后可续转）
+            self._fatal = str(exc)
+            self._status(self._fatal)
+            return False
         except Exception as exc:  # 单窗口失败不终止整体
             self._status(f"转写出错：{exc}")
             self._subtitles.covered.add(start, chunk_end)  # 跳过问题区间避免死循环
