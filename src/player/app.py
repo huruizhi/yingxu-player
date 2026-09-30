@@ -28,9 +28,7 @@ def _apply_surface_format() -> None:
 
 
 def _config_paths() -> tuple[Path, Path, Path]:
-    data_dir = Path(
-        QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
-    )
+    data_dir = Path(QStandardPaths.writableLocation(QStandardPaths.AppDataLocation))
     cache_dir = Path(QStandardPaths.writableLocation(QStandardPaths.CacheLocation))
     return data_dir / "settings.json", data_dir / "state.json", cache_dir / "subtitles"
 

@@ -30,30 +30,38 @@ def main() -> int:
     fmt.setStencilBufferSize(8)
     QSurfaceFormat.setDefaultFormat(fmt)
 
+    media = Path(sys.argv[1]) if len(sys.argv) > 1 else None
+    model_size = sys.argv[2] if len(sys.argv) > 2 else "tiny"
+
     QApplication.setOrganizationName("Player")
     QApplication.setApplicationName("Player")
     app = QApplication(sys.argv)
     apply_dark_theme(app)
 
     tmp = Path(tempfile.mkdtemp(prefix="player_smoke_"))
-    settings = Settings(file_path=tmp / "settings.json")
+    settings = Settings(file_path=tmp / "settings.json", ai_model=model_size)
     store = Store(tmp / "state.json")
     win = MainWindow(settings, store, tmp / "subs")
+    win.transcriber_status.connect(lambda text: print(f"SMOKE: [transcriber] {text}"))
     win.show()
-    if len(sys.argv) > 1:
-        win.open_path(Path(sys.argv[1]))
+    if media is not None:
+        win.open_path(media)
 
     def grab() -> None:
         shot = tmp / "frame.png"
         win.video_area.grab().save(str(shot))
         print(f"SMOKE: frame saved to {shot}")
+        print(f"SMOKE: segments={len(win.subtitles.all_segments())}")
+        print(f"SMOKE: covered={win.subtitles.covered.ranges()}")
+        t = win._transcriber
+        print(f"SMOKE: transcriber alive={t.is_running() if t else None}")
 
     def finish() -> None:
         print("SMOKE: closing")
         win.close()
 
-    QTimer.singleShot(5000, grab)
-    QTimer.singleShot(9000, finish)
+    QTimer.singleShot(7000, grab)
+    QTimer.singleShot(11000, finish)
     rc = app.exec()
     print(f"SMOKE: exit={rc}")
     return rc

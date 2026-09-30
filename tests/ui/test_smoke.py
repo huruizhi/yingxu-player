@@ -4,7 +4,6 @@ AI 字幕默认关闭（OFF），避免单测触发模型下载；AI 真实链�
 scripts/smoke_ai.py 单独验证。
 """
 
-import sys
 from pathlib import Path
 
 import pytest

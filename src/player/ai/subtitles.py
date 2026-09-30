@@ -15,9 +15,7 @@ from pathlib import Path
 from player.ai.base import Segment
 
 _SRT_TIME_RE = re.compile(r"(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})")
-_EVENT_RE = re.compile(
-    r"^\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3})\s*$"
-)
+_EVENT_RE = re.compile(r"^\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3})\s*$")
 
 
 def _parse_srt_time(text: str) -> float:
@@ -73,9 +71,7 @@ def parse_srt(text: str) -> list[Segment]:
     return sorted(segments, key=lambda s: s.start)
 
 
-def gaps_in_ranges(
-    ranges: list[tuple[float, float]], start: float, end: float
-) -> list[tuple[float, float]]:
+def gaps_in_ranges(ranges: list[tuple[float, float]], start: float, end: float) -> list[tuple[float, float]]:
     """计算 [start, end) 与已覆盖区间列表的差集（纯函数，供 IntervalSet 与调度器共用）。"""
     gaps: list[tuple[float, float]] = []
     cursor = start

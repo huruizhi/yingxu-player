@@ -141,7 +141,11 @@ class TestTranscriber:
         decoder = FakeDecoder(total=duration)
         statuses: list[str] = []
         transcriber = FastTranscriber(
-            backend, decoder, subtitles, tmp_path / "media.mkv", duration,
+            backend,
+            decoder,
+            subtitles,
+            tmp_path / "media.mkv",
+            duration,
             on_status=statuses.append,
         )
         transcriber.start(initial)
@@ -150,10 +154,7 @@ class TestTranscriber:
     def test_transcribes_ahead_and_completes(self, tmp_path):
         transcriber, backend, decoder, subtitles, statuses = self.make(tmp_path)
         try:
-            assert wait_until(
-                lambda: subtitles.covered.ranges()
-                and subtitles.covered.ranges()[-1][1] >= 4.0
-            )
+            assert wait_until(lambda: subtitles.covered.ranges() and subtitles.covered.ranges()[-1][1] >= 4.0)
             # 全部转写完毕后进入完成状态并写缓存
             assert wait_until(lambda: DONE_STATUS in statuses)
             assert (tmp_path / "cache").exists()

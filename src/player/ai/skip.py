@@ -39,12 +39,7 @@ class CreditsSkipper:
 
     def on_position(self, t: float) -> bool:
         """播放位置更新时调用；本次调用触发了自动跳过则返回 True。"""
-        if (
-            not self.enabled
-            or self._credits_start is None
-            or self._triggered
-            or self._token is None
-        ):
+        if not self.enabled or self._credits_start is None or self._triggered or self._token is None:
             return False
         if self._credits_start <= t <= self._credits_start + self.GRACE:
             self._triggered = True

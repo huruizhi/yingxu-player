@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 import numpy as np
 
@@ -20,7 +20,7 @@ class Segment:
     end: float
     text: str
 
-    def shifted(self, offset: float) -> "Segment":
+    def shifted(self, offset: float) -> Segment:
         return Segment(self.start + offset, self.end + offset, self.text)
 
 

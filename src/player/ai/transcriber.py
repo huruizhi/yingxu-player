@@ -133,9 +133,7 @@ class Transcriber:
             self._subtitles.covered.add(start, chunk_end)  # 跳过问题区间避免死循环
             return False
 
-        shifted = [
-            seg.shifted(ctx_start) for seg in segments if seg.start + ctx_start >= start - 0.05
-        ]
+        shifted = [seg.shifted(ctx_start) for seg in segments if seg.start + ctx_start >= start - 0.05]
         self._subtitles.add_segments(shifted)
         self._subtitles.covered.add(start, chunk_end)
         self._report_progress(position)

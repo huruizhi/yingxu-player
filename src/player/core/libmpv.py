@@ -8,6 +8,7 @@ Homebrew 默认前缀），python-mpv 导入会失败。这里提供显式候选
 from __future__ import annotations
 
 import ctypes.util
+import sys
 from pathlib import Path
 
 CANDIDATES = [
@@ -15,6 +16,18 @@ CANDIDATES = [
     "/usr/local/lib/libmpv.dylib",  # Homebrew (Intel) / 手动安装
     "/opt/homebrew/opt/mpv/lib/libmpv.dylib",
 ]
+
+
+def _frozen_candidates() -> list[str]:
+    """PyInstaller 打包后，libmpv 随 .app 捆绑在可执行文件同目录。"""
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).parent
+        return [str(exe_dir / "libmpv.dylib")]
+    return []
+
+
+def _candidate_paths() -> list[str]:
+    return _frozen_candidates() + CANDIDATES
 
 
 def find_libmpv() -> str | None:
@@ -25,14 +38,14 @@ def find_libmpv() -> str | None:
         found = None
     if found:
         return found
-    return next((p for p in CANDIDATES if Path(p).exists()), None)
+    return next((p for p in _candidate_paths() if Path(p).exists()), None)
 
 
 def patch_find_library() -> bool:
     """find_library 找不到 mpv 时，用候选路径补丁替换。返回是否已可用。"""
     if ctypes.util.find_library("mpv"):
         return True
-    lib = next((p for p in CANDIDATES if Path(p).exists()), None)
+    lib = next((p for p in _candidate_paths() if Path(p).exists()), None)
     if lib is None:
         return False
     original = ctypes.util.find_library

@@ -59,7 +59,13 @@ def scan_media_files(directory: Path) -> list[Path]:
         and not p.name.startswith("._")  # macOS 资源分叉文件
         and p.suffix.lower() in MEDIA_EXTENSIONS
     ]
-    files.sort(key=lambda p: (natural_key(p.stem), (_EXTENSION_PRIORITY.get(p.suffix.lower(), 1), p.suffix.lower()), p.name))
+    files.sort(
+        key=lambda p: (
+            natural_key(p.stem),
+            (_EXTENSION_PRIORITY.get(p.suffix.lower(), 1), p.suffix.lower()),
+            p.name,
+        )
+    )
     return files
 
 

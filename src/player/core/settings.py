@@ -6,13 +6,13 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, fields
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 
 from player.core.storage import load_json, save_json_atomic
 
 
-class SubtitleSource(str, Enum):
+class SubtitleSource(StrEnum):
     AUTO = "auto"  # 内置字幕优先，无内置字幕轨时才启用 AI 生成
     FORCE_AI = "force_ai"  # 强制 AI 字幕（自动隐藏内置字幕轨，避免重叠）
     OFF = "off"  # 关闭 AI 字幕（内置字幕轨照常显示）
@@ -57,7 +57,7 @@ class Settings:
             self.speed = 1.0
 
     @classmethod
-    def load(cls, path: Path) -> "Settings":
+    def load(cls, path: Path) -> Settings:
         data = load_json(path, {})
         known = {f.name for f in fields(cls)}
         settings = cls(**{k: v for k, v in data.items() if k in known})

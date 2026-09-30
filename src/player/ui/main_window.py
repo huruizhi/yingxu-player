@@ -7,7 +7,6 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QApplication,
     QDockWidget,
     QFileDialog,
     QHBoxLayout,
@@ -26,7 +25,7 @@ from player.ai.transcriber import Transcriber
 from player.ai.whisper_backend import WhisperBackend
 from player.core.playback import Playback
 from player.core.playlist import LoopMode, Playlist, scan_media_files
-from player.core.settings import AI_LANGUAGES, AI_MODELS, Settings, SubtitleSource
+from player.core.settings import AI_MODELS, Settings, SubtitleSource
 from player.core.store import Store
 from player.ui.playlist_panel import PlaylistPanel
 from player.ui.video_area import VideoArea
@@ -153,9 +152,17 @@ class MainWindow(QMainWindow):
         self.playlist_btn = button("☰ 列表", "播放列表 (Ctrl+L)")
 
         for w in (
-            self.prev_btn, self.play_btn, self.next_btn, self.time_label,
-            self.seek_slider, self.duration_label, self.volume_slider,
-            self.speed_btn, self.subtitle_btn, self.skip_btn, self.mark_btn,
+            self.prev_btn,
+            self.play_btn,
+            self.next_btn,
+            self.time_label,
+            self.seek_slider,
+            self.duration_label,
+            self.volume_slider,
+            self.speed_btn,
+            self.subtitle_btn,
+            self.skip_btn,
+            self.mark_btn,
             self.playlist_btn,
         ):
             bar_l.addWidget(w)
@@ -174,9 +181,7 @@ class MainWindow(QMainWindow):
         self.playlist_panel = PlaylistPanel()
         self.playlist_dock = QDockWidget("播放列表", self)
         self.playlist_dock.setWidget(self.playlist_panel)
-        self.playlist_dock.setFeatures(
-            QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetClosable
-        )
+        self.playlist_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetClosable)
         self.addDockWidget(Qt.RightDockWidgetArea, self.playlist_dock)
         self.playlist_dock.hide()
 
@@ -266,7 +271,9 @@ class MainWindow(QMainWindow):
         self._model_group = QActionGroup(self)
         self._model_actions: dict[str, QAction] = {}
         for size in AI_MODELS:
-            act = QAction(f"{size}（{'快' if size in ('tiny', 'base') else '较慢/更准'}）", self, checkable=True)
+            act = QAction(
+                f"{size}（{'快' if size in ('tiny', 'base') else '较慢/更准'}）", self, checkable=True
+            )
             act.triggered.connect(lambda _c, s=size: self._set_ai_model(s))
             self._model_group.addAction(act)
             self._model_actions[size] = act
@@ -278,7 +285,7 @@ class MainWindow(QMainWindow):
         self._lang_actions: dict[str, QAction] = {}
         for lang, label in (("auto", "自动检测"), ("zh", "中文"), ("en", "英文")):
             act = QAction(label, self, checkable=True)
-            act.triggered.connect(lambda _c, l=lang: self._set_ai_language(l))
+            act.triggered.connect(lambda _c, code=lang: self._set_ai_language(code))
             self._lang_group.addAction(act)
             self._lang_actions[lang] = act
             self._lang_menu.addAction(act)
@@ -331,13 +338,9 @@ class MainWindow(QMainWindow):
 
         self.seek_slider.sliderPressed.connect(lambda: setattr(self, "_scrubbing", True))
         self.seek_slider.sliderReleased.connect(self._on_seek_released)
-        self.seek_slider.sliderMoved.connect(
-            lambda v: self.time_label.setText(_fmt_time(v / 1000))
-        )
+        self.seek_slider.sliderMoved.connect(lambda v: self.time_label.setText(_fmt_time(v / 1000)))
         self.volume_slider.valueChanged.connect(self._on_volume_changed)
-        self.transcriber_status.connect(
-            lambda text: self.statusBar().showMessage(text, 4000)
-        )
+        self.transcriber_status.connect(lambda text: self.statusBar().showMessage(text, 4000))
 
     def _restore_window(self) -> None:
         geo = self.settings.window or {}
@@ -394,9 +397,7 @@ class MainWindow(QMainWindow):
         self.playlist_panel.highlight_current(self.playlist.current_item)
         self._update_skip_ui()
         if self._pending_resume:
-            self.statusBar().showMessage(
-                f"已恢复到上次进度 {_fmt_time(self._pending_resume)}", 4000
-            )
+            self.statusBar().showMessage(f"已恢复到上次进度 {_fmt_time(self._pending_resume)}", 4000)
         else:
             self.statusBar().showMessage(path.name, 4000)
 
@@ -454,10 +455,7 @@ class MainWindow(QMainWindow):
             self.playback.select_sub_track(None)  # 隐藏内置字幕，避免重叠
         elif mode is SubtitleSource.AUTO:
             self.playback.reset_sub_track_auto()
-        wanted = (
-            mode is SubtitleSource.FORCE_AI
-            or (mode is SubtitleSource.AUTO and not has_embedded)
-        )
+        wanted = mode is SubtitleSource.FORCE_AI or (mode is SubtitleSource.AUTO and not has_embedded)
         if self._ai_override is not None:
             wanted = self._ai_override
         self._set_ai_active(wanted)
@@ -465,9 +463,7 @@ class MainWindow(QMainWindow):
     def _set_ai_active(self, active: bool) -> None:
         self._ai_active = active
         self.subtitle_btn.setChecked(active)
-        self.subtitle_btn.setToolTip(
-            "AI 字幕：开启中（点击关闭）" if active else "AI 字幕：关闭（点击开启）"
-        )
+        self.subtitle_btn.setToolTip("AI 字幕：开启中（点击关闭）" if active else "AI 字幕：关闭（点击开启）")
         if active:
             self._start_ai_transcription()
         else:
@@ -478,9 +474,7 @@ class MainWindow(QMainWindow):
     def _toggle_ai_manual(self) -> None:
         self._ai_override = not self._ai_active
         self._set_ai_active(self._ai_override)
-        self.statusBar().showMessage(
-            "AI 字幕：开启" if self._ai_override else "AI 字幕：关闭", 3000
-        )
+        self.statusBar().showMessage("AI 字幕：开启" if self._ai_override else "AI 字幕：关闭", 3000)
 
     def _start_ai_transcription(self) -> None:
         if self._current_file is None:
@@ -495,9 +489,7 @@ class MainWindow(QMainWindow):
         if duration <= 0:
             return  # 等 duration_changed 再启动
         if self._stt is None or self._stt_model_size != self.settings.ai_model:
-            self._stt = WhisperBackend(
-                model_size=self.settings.ai_model, language=self.settings.ai_language
-            )
+            self._stt = WhisperBackend(model_size=self.settings.ai_model, language=self.settings.ai_language)
             self._stt_model_size = self.settings.ai_model
         decoder = self._make_decoder(self._current_file)
         if decoder is None:
@@ -515,7 +507,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _make_decoder(path: Path):
-        from player.ai.audio_source import AudioDecoder, AudioDecodeError
+        from player.ai.audio_source import AudioDecodeError, AudioDecoder
 
         try:
             return AudioDecoder(path)
@@ -610,9 +602,7 @@ class MainWindow(QMainWindow):
         self.store.mark_credits(self._current_file, pos)
         self.skipper.on_file_opened(self._current_file)
         self._update_skip_ui()
-        self.statusBar().showMessage(
-            f"已标记片尾起点 {_fmt_time(pos)}（对同目录文件同样生效）", 6000
-        )
+        self.statusBar().showMessage(f"已标记片尾起点 {_fmt_time(pos)}（对同目录文件同样生效）", 6000)
 
     def _clear_credits(self) -> None:
         if self._current_file is None:
@@ -626,9 +616,7 @@ class MainWindow(QMainWindow):
         self.settings.skip_credits_enabled = checked
         self.skipper.enabled = checked
         self._update_skip_ui()
-        self.statusBar().showMessage(
-            "自动跳过片尾：开" if checked else "自动跳过片尾：关", 3000
-        )
+        self.statusBar().showMessage("自动跳过片尾：开" if checked else "自动跳过片尾：关", 3000)
 
     def _update_skip_ui(self) -> None:
         has_mark = self._current_file is not None and self.skipper.has_mark()
@@ -693,10 +681,29 @@ class MainWindow(QMainWindow):
     # ================= 对话框与拖拽 =================
 
     def _open_file_dialog(self) -> None:
-        exts = " ".join(f"*{e}" for e in sorted(
-            {".mkv", ".mp4", ".mov", ".avi", ".webm", ".ts", ".m4v",
-             ".flv", ".wmv", ".mp3", ".flac", ".m4a", ".wav", ".aac", ".ogg", ".opus"}
-        ))
+        exts = " ".join(
+            f"*{e}"
+            for e in sorted(
+                {
+                    ".mkv",
+                    ".mp4",
+                    ".mov",
+                    ".avi",
+                    ".webm",
+                    ".ts",
+                    ".m4v",
+                    ".flv",
+                    ".wmv",
+                    ".mp3",
+                    ".flac",
+                    ".m4a",
+                    ".wav",
+                    ".aac",
+                    ".ogg",
+                    ".opus",
+                }
+            )
+        )
         path, _ = QFileDialog.getOpenFileName(
             self, "打开媒体文件", str(Path.home()), f"媒体文件 ({exts});;所有文件 (*)"
         )
@@ -741,7 +748,10 @@ class MainWindow(QMainWindow):
         self.settings.volume = self.volume_slider.value()
         geo = self.geometry()
         self.settings.window = {
-            "x": geo.x(), "y": geo.y(), "w": geo.width(), "h": geo.height(),
+            "x": geo.x(),
+            "y": geo.y(),
+            "w": geo.width(),
+            "h": geo.height(),
             "maximized": self.isMaximized(),
         }
         self.settings.playlist_mode = self.playlist.mode.value

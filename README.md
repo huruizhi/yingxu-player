@@ -15,9 +15,14 @@
 make setup    # 建虚拟环境、装依赖（需要 Homebrew 的 mpv 提供 libmpv）
 make test     # 运行测试
 make run      # 启动播放器
+make package  # 打包 dist/Player.app（捆绑 libmpv，无需 brew 依赖）
 ```
 
-依赖说明：`brew install mpv` 提供 libmpv 动态库；首次使用 AI 字幕会自动下载识别模型（默认 small/int8 约 250MB，之后离线可用）。
+依赖说明：`brew install mpv` 提供 libmpv 动态库；首次使用 AI 字幕会自动下载识别模型（默认 small/int8 约 250MB，之后完全离线）。
+
+## AI 字幕工作方式
+
+转写线程持续把播放位置之后 60 秒窗口的内容转写掉，字幕按播放时钟精确显示——观感即"实时"，且比逐句流式更稳；领先窗口无欠账后自动补全整个文件并写缓存（`.srt`，按文件指纹存放），二次打开不再耗 CPU。文件自带字幕时默认直接用内置字幕（MKV 内封 ASS 正常渲染），设置中可改为始终 AI 或关闭。设计细节见 `docs/design.md`。
 
 ## 使用
 
