@@ -20,6 +20,7 @@ from player.ai.skip import CreditsSkipper
 from player.ai.subtitles import SubtitleStore
 from player.ai.transcriber import Transcriber
 from player.ai.whisper_backend import WhisperBackend
+from player.core.airplay import AirPlaySession, can_airplay
 from player.core.display_sleep import DisplaySleepInhibitor
 from player.core.playback import Playback
 from player.core.playlist import VIDEO_EXTENSIONS, LoopMode, Playlist, scan_media_files
@@ -62,6 +63,9 @@ class MainWindow(QMainWindow):
         self.skipper.on_skip = self._advance_to_next
 
         self.playback = playback if playback is not None else Playback(self)
+        self._airplay: AirPlaySession | None = None
+        self._airplay_active = False
+        self._airplay_was_playing = False
         self._display_sleep_inhibitor = DisplaySleepInhibitor()
         self._stt: WhisperBackend | None = None
         self._stt_model_size: str | None = None
@@ -83,6 +87,11 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("映序")
         self.setAcceptDrops(True)
         self._build_ui()
+        try:
+            self._airplay = AirPlaySession(self.video_area.control_bar.airplay_btn)
+        except (ImportError, RuntimeError, AttributeError) as exc:
+            self.video_area.control_bar.airplay_btn.hide()
+            print(f"[airplay] unavailable: {exc}")
         self._build_menus()
         self._build_shortcuts()
         self._connect_playback()
@@ -306,7 +315,7 @@ class MainWindow(QMainWindow):
             sc = QShortcut(QKeySequence(seq), self)
             sc.activated.connect(slot)
 
-        bind("Space", self.playback.toggle_play)
+        bind("Space", self._toggle_playback)
         bind("Left", lambda: self._seek_and_feedback(-10))
         bind("Right", lambda: self._seek_and_feedback(+10))
         bind("Up", lambda: self._change_volume(+5))
@@ -319,7 +328,7 @@ class MainWindow(QMainWindow):
         self.next_btn.clicked.connect(lambda: self._play_sibling(+1))
         self.act_prev.triggered.connect(lambda: self._play_sibling(-1))
         self.act_next.triggered.connect(lambda: self._play_sibling(+1))
-        self.play_btn.clicked.connect(self.playback.toggle_play)
+        self.play_btn.clicked.connect(self._toggle_playback)
         self.subtitle_btn.clicked.connect(self._toggle_ai_manual)
         self.skip_btn.clicked.connect(self.skipper.manual_skip)
         self.act_mark.triggered.connect(self._mark_credits)
@@ -334,7 +343,7 @@ class MainWindow(QMainWindow):
         self.skipper.enabled = self.settings.skip_credits_enabled
 
         # 视频区交互：单击暂停/播放，双击全屏
-        self.video_area.single_clicked.connect(self.playback.toggle_play)
+        self.video_area.single_clicked.connect(self._toggle_playback)
         self.video_area.double_clicked.connect(self.toggle_fullscreen)
         self.video_area.mouse_activity.connect(self._on_mouse_activity)
         self.video_area.scrub_started.connect(self._auto_hide.force_show)
@@ -438,11 +447,24 @@ class MainWindow(QMainWindow):
         self._subtitles_loaded_from_cache = False
         self.video_area.set_empty_state(False)
         self.video_area.set_media_title(path.name)
+        self.video_area.control_bar.airplay_btn.setVisible(can_airplay(path))
 
         self.subtitles.clear_runtime()
         self.video_area.timeline.set_covered([])
         self.skipper.on_file_opened(path)
+        airplay_supported = self._airplay is not None and self._airplay.load(
+            path, self._pending_resume or 0.0
+        )
+        if self._airplay_active and not airplay_supported:
+            self._airplay_active = False
+            self.video_area.status_chip.set_status(None)
+            self.video_area.show_osd("当前格式不支持 AirPlay 直投，已切回本机播放")
         self.playback.load(path)
+        if self._airplay_active:
+            self.playback.pause()
+            self._airplay.set_volume(self.settings.volume)
+            self._airplay.set_speed(self.settings.speed)
+            self._airplay.set_paused(False)
 
         self.setWindowTitle(f"{path.name} — 映序")
         self.video_area.status_chip.set_status(None)
@@ -493,8 +515,64 @@ class MainWindow(QMainWindow):
         # track-list 事件到达后 _on_tracks_changed 会再校正
         self._apply_subtitle_policy()
 
+    def _toggle_playback(self) -> None:
+        if self._airplay_active and self._airplay is not None:
+            should_play = self._airplay.player.rate() == 0
+            self._airplay_was_playing = should_play
+            self._airplay.set_paused(not should_play)
+            self.video_area.control_bar.set_paused(not should_play)
+            self._sync_display_sleep_inhibitor()
+            return
+        self.playback.toggle_play()
+
+    def _current_position(self) -> float | None:
+        if self._airplay_active and self._airplay is not None:
+            return self._airplay.position()
+        return self.playback.position()
+
+    def _current_duration(self) -> float | None:
+        if self._airplay_active and self._airplay is not None:
+            return self._airplay.duration() or self.playback.duration()
+        return self.playback.duration()
+
+    def _sync_airplay_route(self) -> None:
+        if self._airplay is None:
+            return
+        active = self._airplay.is_active()
+        if active == self._airplay_active:
+            return
+        if active:
+            position = self.playback.position() or 0.0
+            self._airplay_was_playing = not self.playback.is_paused()
+            self._airplay.seek(position)
+            self._airplay.set_volume(self.settings.volume)
+            self._airplay.set_speed(self.settings.speed)
+            self._airplay_active = True
+            self.playback.pause()
+            self._airplay.set_paused(not self._airplay_was_playing)
+            self.video_area.status_chip.set_status("AirPlay 已连接")
+            if self._ai_active or self.playback.sub_tracks():
+                self.video_area.show_osd("已投屏。AI 字幕与播放器内字幕不会传到电视。")
+            else:
+                self.video_area.show_osd("已连接 AirPlay")
+        else:
+            position = self._airplay.position()
+            if position is not None:
+                self.playback.seek_absolute(position, exact=False)
+            was_playing = self._airplay_was_playing
+            self._airplay_active = False
+            self._airplay.set_paused(True)
+            if was_playing:
+                self.playback.play()
+            self.video_area.status_chip.set_status(None)
+            self.video_area.show_osd("已断开 AirPlay，继续在本机播放")
+        self._sync_display_sleep_inhibitor()
+
     def _on_paused_changed(self, paused: bool) -> None:
-        self.video_area.control_bar.set_paused(paused)
+        if self._airplay_active and self._airplay is not None:
+            self.video_area.control_bar.set_paused(self._airplay.player.rate() == 0)
+        else:
+            self.video_area.control_bar.set_paused(paused)
         self._auto_hide.force_show()  # 暂停时控制层保持可见
         self._apply_controls_visibility()
         self._sync_display_sleep_inhibitor()
@@ -503,7 +581,10 @@ class MainWindow(QMainWindow):
         playing_video = (
             self._current_file is not None
             and self._current_file.suffix.lower() in VIDEO_EXTENSIONS
-            and not self.playback.is_paused()
+            and (
+                (self._airplay_active and self._airplay is not None and self._airplay.player.rate() != 0)
+                or (not self._airplay_active and not self.playback.is_paused())
+            )
         )
         self._display_sleep_inhibitor.set_playing_video(playing_video)
 
@@ -513,6 +594,8 @@ class MainWindow(QMainWindow):
             pos, self._pending_resume = self._pending_resume, None
             if pos < duration - 5:
                 self.playback.seek_absolute(pos, exact=False)
+                if self._airplay is not None:
+                    self._airplay.seek(pos)
         if self._ai_active and not self._transcriber and not self._subtitles_loaded_from_cache:
             self._start_ai_transcription()  # 拿到时长后再启动转写
 
@@ -734,10 +817,15 @@ class MainWindow(QMainWindow):
     # ================= 控件联动 =================
 
     def _on_tick(self) -> None:
-        pos = self.playback.position()
-        duration = self.playback.duration()
+        self._sync_airplay_route()
+        pos = self._current_position()
+        duration = self._current_duration()
         if pos is not None:
             self.timeline.set_position(pos, duration or 0.0)
+            if self._airplay is not None and not self._airplay_active:
+                airplay_pos = self._airplay.position()
+                if airplay_pos is None or abs(airplay_pos - pos) > 1.5:
+                    self._airplay.seek(pos)
             if self._transcriber is not None:
                 self._transcriber.notify_position(pos)
                 self.video_area.timeline.set_covered(self.subtitles.covered.ranges())
@@ -745,7 +833,10 @@ class MainWindow(QMainWindow):
         # 自动隐藏判定：悬停控制层视为活动，保持显示
         if self.video_area.cursor_over_controls():
             self._auto_hide.activity()
-        elif self._auto_hide.tick(paused=self.playback.is_paused(), fullscreen=self.isFullScreen()):
+        elif self._auto_hide.tick(
+            paused=(self._airplay.player.rate() == 0 if self._airplay_active else self.playback.is_paused()),
+            fullscreen=self.isFullScreen(),
+        ):
             self._apply_controls_visibility()
 
         if self._current_file is None or pos is None:
@@ -761,17 +852,23 @@ class MainWindow(QMainWindow):
 
     def _on_scrub_finished(self, seconds: float) -> None:
         self.playback.seek_absolute(seconds, exact=False)
+        if self._airplay is not None:
+            self._airplay.seek(seconds)
         self._auto_hide.force_show()
         self._apply_controls_visibility()
 
     def _seek_and_feedback(self, delta: float) -> None:
         self.playback.seek_relative(delta)
+        if self._airplay_active and self._airplay is not None:
+            self._airplay.seek((self._airplay.position() or 0.0) + delta)
         self._auto_hide.force_show()
         self._apply_controls_visibility()
 
     def _on_volume_changed(self, value: int) -> None:
         self.settings.volume = value
         self.playback.set_volume(value)
+        if self._airplay is not None:
+            self._airplay.set_volume(value)
         self.video_area.show_osd(f"音量 {min(value, 100)}%{'+' if value > 100 else ''}")
 
     def _change_volume(self, delta: int) -> None:
@@ -780,6 +877,8 @@ class MainWindow(QMainWindow):
     def _set_speed(self, speed: float) -> None:
         self.settings.speed = speed
         self.playback.set_speed(speed)
+        if self._airplay is not None:
+            self._airplay.set_speed(speed)
         self.speed_btn.setText(f"{speed:g}x")
         self.video_area.show_osd(f"倍速 {speed:g}x")
         for act in self.speed_menu.actions():
@@ -854,8 +953,8 @@ class MainWindow(QMainWindow):
     def _save_progress_now(self) -> None:
         if self._current_file is None:
             return
-        pos = self.playback.position()
-        dur = self.playback.duration()
+        pos = self._current_position()
+        dur = self._current_duration()
         if pos is not None and dur:
             self.store.set_progress(self._current_file, pos, dur)
         self.store.save()
@@ -878,6 +977,8 @@ class MainWindow(QMainWindow):
         self._save_progress_now()
         self._stop_transcriber(wait_timeout=8.0)
         self._display_sleep_inhibitor.close()
+        if self._airplay is not None:
+            self._airplay.close()
         self.video_area.mpv_widget.shutdown()
         self.playback.terminate()
         super().closeEvent(event)

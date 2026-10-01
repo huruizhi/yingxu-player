@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from player.core.airplay import AirPlayButton
 from player.ui.icons import icon
 from player.ui.theme import OVERLAY_QSS
 
@@ -87,8 +88,15 @@ class ControlBar(QWidget):
         self.volume_slider.setToolTip("音量 (↑/↓)")
         self.volume_slider.setAccessibleName("音量")
         self.fullscreen_btn = _button("fullscreen", "全屏 (F)")
+        self.airplay_btn = AirPlayButton()
         self.playlist_btn = _button("playlist", "播放列表 (Ctrl+L)", checkable=True)
-        for widget in (self.volume_icon, self.volume_slider, self.playlist_btn, self.fullscreen_btn):
+        for widget in (
+            self.volume_icon,
+            self.volume_slider,
+            self.airplay_btn,
+            self.playlist_btn,
+            self.fullscreen_btn,
+        ):
             right_l.addWidget(widget)
 
         grid = QGridLayout(self)
