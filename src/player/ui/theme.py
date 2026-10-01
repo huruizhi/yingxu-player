@@ -74,6 +74,12 @@ QPushButton#openPrimary { background: #dce8ff; border: 1px solid #dce8ff; color:
 QPushButton#openPrimary:hover { background: #ffffff; }
 QPushButton#openSecondary { background: #252830; border: 1px solid #41444d; color: #e3e6ed; }
 QPushButton#openSecondary:hover { background: #30333c; }
+QPushButton#recentDirectory {
+    min-width: 260px; min-height: 30px; padding: 0 12px;
+    background: #252830; border: 1px solid #41444d; border-radius: 8px;
+    color: #e3e6ed; text-align: left;
+}
+QPushButton#recentDirectory:hover { background: #30333c; }
 QPushButton:focus { border-color: #829ac0; }
 QLabel#videoTitle { color: #f0f1f4; font-size: 14px; font-weight: 600; }
 QLabel#topStatus {

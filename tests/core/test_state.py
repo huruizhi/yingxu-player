@@ -64,6 +64,17 @@ class TestSettings:
         save_json_atomic(path, {"subtitle_source": "????"})
         assert Settings.load(path).subtitle_source is SubtitleSource.AUTO
 
+    def test_recent_directories_round_trip_and_order(self, tmp_path):
+        path = tmp_path / "settings.json"
+        a, b = tmp_path / "a", tmp_path / "b"
+        settings = Settings(file_path=path)
+        settings.remember_directory(a)
+        settings.remember_directory(b)
+        settings.remember_directory(a)
+        settings.save()
+
+        assert Settings.load(path).recent_directories == [str(a), str(b)]
+
 
 @pytest.fixture()
 def media(tmp_path: Path) -> Path:

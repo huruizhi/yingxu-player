@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QGraphicsDropShadowEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -40,11 +38,6 @@ class ControlBar(QWidget):
         self.setStyleSheet(OVERLAY_QSS)
 
         self.setFixedHeight(112)
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(30)
-        shadow.setOffset(0, 8)
-        shadow.setColor(QColor(0, 0, 0, 150))
-        self.setGraphicsEffect(shadow)
 
         left = QWidget(self)
         left_l = QHBoxLayout(left)

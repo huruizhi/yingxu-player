@@ -50,6 +50,21 @@ def test_open_directory_plays_first(window, qtbot):
     window.open_path(MEDIA)
     assert len(window.playlist) == 3
     assert window.playlist.current_item is not None
+    assert window.settings.recent_directories[0] == str(MEDIA)
+    assert window._dialog_start_directory() == str(MEDIA)
+    assert window._recent_dirs_menu.actions()[0].toolTip() == str(MEDIA)
+    window.close()
+
+
+def test_recent_directory_shortcut_opens_saved_directory(window, monkeypatch):
+    window.settings.remember_directory(MEDIA)
+    window._refresh_recent_directories()
+    opened = []
+    monkeypatch.setattr(window, "open_path", opened.append)
+
+    window.video_area.empty_state.recent_layout.itemAt(1).widget().click()
+
+    assert opened == [MEDIA]
     window.close()
 
 

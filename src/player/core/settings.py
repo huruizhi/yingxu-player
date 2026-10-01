@@ -24,6 +24,7 @@ class SubtitleSource(StrEnum):
 
 AI_MODELS = ("tiny", "base", "small", "medium")
 AI_LANGUAGES = ("auto", "zh", "en")
+MAX_RECENT_DIRECTORIES = 8
 
 
 @dataclass
@@ -35,6 +36,7 @@ class Settings:
     volume: int = 60
     speed: float = 1.0
     playlist_mode: str = "all"  # LoopMode 的值
+    recent_directories: list[str] = field(default_factory=list)
     window: dict = field(default_factory=dict)  # 窗口几何 {x,y,w,h,maximized}
     file_path: Path | None = None  # 持久化位置；None 表示不落盘（测试/临时）
 
@@ -55,6 +57,16 @@ class Settings:
             self.speed = 1.0
         if not 0.25 <= self.speed <= 4.0:
             self.speed = 1.0
+        if not isinstance(self.recent_directories, list):
+            self.recent_directories = []
+        self.recent_directories = list(
+            dict.fromkeys(path for path in self.recent_directories if isinstance(path, str) and path)
+        )[:MAX_RECENT_DIRECTORIES]
+
+    def remember_directory(self, directory: Path) -> None:
+        path = str(Path(directory).expanduser().resolve())
+        self.recent_directories = [path, *(p for p in self.recent_directories if p != path)]
+        self.recent_directories = self.recent_directories[:MAX_RECENT_DIRECTORIES]
 
     @classmethod
     def load(cls, path: Path) -> Settings:

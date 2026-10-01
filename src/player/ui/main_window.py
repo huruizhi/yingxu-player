@@ -130,6 +130,8 @@ class MainWindow(QMainWindow):
         self.volume_slider.setValue(self.settings.volume)
         self.video_area.empty_state.open_file.connect(self._open_file_dialog)
         self.video_area.empty_state.open_directory.connect(self._open_dir_dialog)
+        self.video_area.empty_state.open_recent_directory.connect(lambda path: self.open_path(Path(path)))
+        self._refresh_recent_directories()
         self.video_area.set_empty_state(True)
         self.video_area.control_bar.set_paused(self.playback.is_paused())
 
@@ -142,6 +144,8 @@ class MainWindow(QMainWindow):
         self.act_open.setShortcut(QKeySequence.StandardKey.Open)
         self.act_open_dir = QAction("打开目录…", self)
         self.act_open_dir.setShortcut(QKeySequence("Ctrl+Shift+O"))
+        self._recent_dirs_menu = QMenu("最近打开的目录", self)
+        self._recent_dirs_menu.aboutToShow.connect(self._refresh_recent_directories)
         self.act_export = QAction("导出 AI 字幕 (.srt)…", self)
         self.act_export.setShortcut(QKeySequence("Ctrl+E"))
         act_quit = QAction("退出", self)
@@ -149,6 +153,8 @@ class MainWindow(QMainWindow):
         act_quit.triggered.connect(self.close)
         for a in (self.act_open, self.act_open_dir, self.act_export):
             m_file.addAction(a)
+        m_file.addMenu(self._recent_dirs_menu)
+        self._refresh_recent_directories()
         m_file.addSeparator()
         m_file.addAction(act_quit)
 
@@ -427,6 +433,7 @@ class MainWindow(QMainWindow):
                 return
             self.playlist.load_directory(path)
             self._refresh_playlist_panel()
+            self._remember_directory(path)
             self.play_path(files[0])
             return
         if not path.is_file():
@@ -438,7 +445,29 @@ class MainWindow(QMainWindow):
         else:
             self.playlist.jump_to_path(path)
             self._refresh_playlist_panel()
+        self._remember_directory(path.parent)
         self.play_path(path)
+
+    def _available_recent_directories(self) -> list[str]:
+        return [path for path in self.settings.recent_directories if Path(path).is_dir()]
+
+    def _refresh_recent_directories(self) -> None:
+        directories = self._available_recent_directories()
+        self.video_area.empty_state.set_recent_directories(directories)
+        if not hasattr(self, "_recent_dirs_menu"):
+            return
+        self._recent_dirs_menu.clear()
+        for directory in directories:
+            path = Path(directory)
+            action = self._recent_dirs_menu.addAction(f"{path.name or directory}  ·  {path.parent}")
+            action.setToolTip(directory)
+            action.triggered.connect(lambda _checked=False, value=directory: self.open_path(Path(value)))
+        self._recent_dirs_menu.setEnabled(bool(directories))
+
+    def _remember_directory(self, directory: Path) -> None:
+        self.settings.remember_directory(directory)
+        self.settings.save()
+        self._refresh_recent_directories()
 
     def play_path(self, path: Path) -> None:
         path = Path(path)
@@ -968,15 +997,19 @@ class MainWindow(QMainWindow):
             )
         )
         path, _ = QFileDialog.getOpenFileName(
-            self, "打开媒体文件", str(Path.home()), f"媒体文件 ({exts});;所有文件 (*)"
+            self, "打开媒体文件", self._dialog_start_directory(), f"媒体文件 ({exts});;所有文件 (*)"
         )
         if path:
             self.open_path(Path(path))
 
     def _open_dir_dialog(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "打开目录", str(Path.home()))
+        path = QFileDialog.getExistingDirectory(self, "打开目录", self._dialog_start_directory())
         if path:
             self.open_path(Path(path))
+
+    def _dialog_start_directory(self) -> str:
+        directories = self._available_recent_directories()
+        return directories[0] if directories else str(Path.home())
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
         if event.mimeData().hasUrls():

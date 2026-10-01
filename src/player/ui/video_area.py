@@ -84,6 +84,7 @@ class VideoArea(QWidget):
             self.subtitle.show_text(None)
         else:
             self.timeline.setVisible(self._controls_shown)
+            self._relayout()
         self._place_subtitle()
         self.empty_state.raise_()
 

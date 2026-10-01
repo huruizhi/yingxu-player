@@ -1,5 +1,7 @@
 """The idle screen offers a direct route into playback."""
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
@@ -10,6 +12,7 @@ from player.ui.theme import OVERLAY_QSS
 class EmptyState(QWidget):
     open_file = Signal()
     open_directory = Signal()
+    open_recent_directory = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -56,6 +59,18 @@ class EmptyState(QWidget):
         actions.addStretch()
         layout.addLayout(actions)
         layout.addSpacing(18)
+
+        self.recent_widget = QWidget(self)
+        self.recent_layout = QVBoxLayout(self.recent_widget)
+        self.recent_layout.setContentsMargins(0, 0, 0, 0)
+        self.recent_layout.setSpacing(6)
+        recent_title = QLabel("最近打开的目录")
+        recent_title.setObjectName("welcomeHint")
+        recent_title.setAlignment(Qt.AlignCenter)
+        self.recent_layout.addWidget(recent_title)
+        layout.addWidget(self.recent_widget, 0, Qt.AlignHCenter)
+        self.recent_widget.hide()
+        layout.addSpacing(18)
         hint = QLabel("⌘ O  打开文件     ·     ⇧ ⌘ O  打开目录")
         hint.setObjectName("welcomeHint")
         hint.setAlignment(Qt.AlignCenter)
@@ -65,3 +80,23 @@ class EmptyState(QWidget):
         formats.setObjectName("welcomeHint")
         formats.setAlignment(Qt.AlignCenter)
         layout.addWidget(formats)
+
+    def set_recent_directories(self, directories: list[str]) -> None:
+        while self.recent_layout.count() > 1:
+            item = self.recent_layout.takeAt(1)
+            if widget := item.widget():
+                widget.deleteLater()
+        for directory in directories[:3]:
+            path = Path(directory)
+            button = QPushButton(f"{path.name or directory}  ·  {path.parent.name}")
+            button.setText(button.fontMetrics().elidedText(button.text(), Qt.ElideMiddle, 370))
+            button.setObjectName("recentDirectory")
+            button.setMaximumWidth(420)
+            button.setToolTip(directory)
+            button.setAccessibleName(f"打开最近目录：{directory}")
+            button.setCursor(Qt.PointingHandCursor)
+            button.clicked.connect(
+                lambda _checked=False, value=directory: self.open_recent_directory.emit(value)
+            )
+            self.recent_layout.addWidget(button)
+        self.recent_widget.setVisible(bool(directories))
