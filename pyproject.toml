@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "player"
-version = "0.1.5"
+version = "0.1.6"
 description = "映序：简洁沉浸的桌面播放器，支持本地 AI 实时字幕和目录播放列表"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -66,6 +66,7 @@ class MainWindow(QMainWindow):
         self._airplay: AirPlaySession | None = None
         self._airplay_active = False
         self._airplay_was_playing = False
+        self._airplay_error_reported_for: Path | None = None
         self._display_sleep_inhibitor = DisplaySleepInhibitor()
         self._stt: WhisperBackend | None = None
         self._stt_model_size: str | None = None
@@ -89,6 +90,8 @@ class MainWindow(QMainWindow):
         self._build_ui()
         try:
             self._airplay = AirPlaySession(self.video_area.control_bar.airplay_btn)
+            self._airplay.picker_opened.connect(self._on_airplay_picker_opened)
+            self._airplay.picker_closed.connect(self._on_airplay_picker_closed)
         except (ImportError, RuntimeError, AttributeError) as exc:
             self.video_area.control_bar.airplay_btn.hide()
             print(f"[airplay] unavailable: {exc}")
@@ -447,18 +450,20 @@ class MainWindow(QMainWindow):
         self._subtitles_loaded_from_cache = False
         self.video_area.set_empty_state(False)
         self.video_area.set_media_title(path.name)
-        self.video_area.control_bar.airplay_btn.setVisible(can_airplay(path))
+        self.video_area.control_bar.airplay_btn.hide()
+        self._airplay_error_reported_for = None
 
         self.subtitles.clear_runtime()
         self.video_area.timeline.set_covered([])
         self.skipper.on_file_opened(path)
-        airplay_supported = self._airplay is not None and self._airplay.load(
-            path, self._pending_resume or 0.0
-        )
-        if self._airplay_active and not airplay_supported:
+        airplay_state = "unsupported"
+        if self._airplay is not None:
+            airplay_state = self._airplay.load(path, self._pending_resume or 0.0)
+        if self._airplay_active and airplay_state != "ready":
             self._airplay_active = False
             self.video_area.status_chip.set_status(None)
-            self.video_area.show_osd("当前格式不支持 AirPlay 直投，已切回本机播放")
+            self._airplay.set_paused(True)
+            self.video_area.show_osd("正在准备新视频，电视投屏已断开；准备好后可重新连接")
         self.playback.load(path)
         if self._airplay_active:
             self.playback.pause()
@@ -567,6 +572,28 @@ class MainWindow(QMainWindow):
             self.video_area.status_chip.set_status(None)
             self.video_area.show_osd("已断开 AirPlay，继续在本机播放")
         self._sync_display_sleep_inhibitor()
+
+    def _on_airplay_picker_opened(self) -> None:
+        if self._airplay is None or not self._airplay.is_ready() or self._airplay_active:
+            return
+        self._airplay_was_playing = not self.playback.is_paused()
+        self._airplay.seek(self.playback.position() or 0.0)
+        self._airplay.set_speed(self.settings.speed)
+        # AVPlayer does not establish an external video route until playback starts.
+        # Keep it muted until the route is confirmed, so local playback remains audible.
+        self._airplay.set_volume(0)
+        self._airplay.set_paused(False)
+
+    def _on_airplay_picker_closed(self) -> None:
+        if self._airplay is None or self._airplay_active:
+            return
+        QTimer.singleShot(300, self._stop_unrouted_airplay_probe)
+
+    def _stop_unrouted_airplay_probe(self) -> None:
+        if self._airplay is None or self._airplay_active or self._airplay.is_active():
+            return
+        self._airplay.set_paused(True)
+        self._airplay.set_volume(self.settings.volume)
 
     def _on_paused_changed(self, paused: bool) -> None:
         if self._airplay_active and self._airplay is not None:
@@ -817,6 +844,7 @@ class MainWindow(QMainWindow):
     # ================= 控件联动 =================
 
     def _on_tick(self) -> None:
+        self._sync_airplay_availability()
         self._sync_airplay_route()
         pos = self._current_position()
         duration = self._current_duration()
@@ -849,6 +877,25 @@ class MainWindow(QMainWindow):
         if self._tick_count % _PROGRESS_SAVE_TICKS == 0 and duration:
             self.store.set_progress(self._current_file, pos, duration)
             self.store.save()
+
+    def _sync_airplay_availability(self) -> None:
+        if self._airplay is None or self._current_file is None:
+            return
+        button = self.video_area.control_bar.airplay_btn
+        if self._airplay.source_path != self._current_file or not can_airplay(self._current_file):
+            button.hide()
+            return
+        if self._airplay.item_failed() or self._airplay.load_error:
+            button.hide()
+            if self._airplay_error_reported_for != self._current_file:
+                self.video_area.show_osd(f"此文件无法直投：{self._airplay.item_error()}")
+                self._airplay_error_reported_for = self._current_file
+            return
+        ready = self._airplay.is_ready()
+        if button.isVisible() != ready:
+            button.setVisible(ready)
+            if ready:
+                self.video_area.show_osd("AirPlay 已准备好，可选择电视")
 
     def _on_scrub_finished(self, seconds: float) -> None:
         self.playback.seek_absolute(seconds, exact=False)

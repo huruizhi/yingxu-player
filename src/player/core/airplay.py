@@ -1,24 +1,65 @@
-"""macOS AirPlay route picker and AVPlayer bridge.
-
-AVRoutePickerView only routes AVFoundation players. The app keeps mpv as its
-normal playback engine and uses this small bridge while the user is casting.
-"""
+"""macOS AirPlay route picker and AVPlayer bridge."""
 
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QWidget
 
-AIRPLAY_SUFFIXES = {".mp4", ".m4v", ".mov"}
+from player.core.playlist import VIDEO_EXTENSIONS
+
+DIRECT_SUFFIXES = {".mp4", ".m4v", ".mov"}
 
 
 def can_airplay(path: Path) -> bool:
-    """Common AVFoundation movie containers supported for direct casting."""
-    return path.suffix.lower() in AIRPLAY_SUFFIXES
+    """Whether a video can be sent directly or remuxed without re-encoding."""
+    return path.suffix.lower() in VIDEO_EXTENSIONS
+
+
+def remux_to_mp4(source_path: Path, output_path: Path) -> None:
+    """Repackage video/audio streams into MP4 without changing the codecs."""
+    import av
+
+    with av.open(str(source_path)) as source:
+        with av.open(str(output_path), mode="w", format="mp4") as output:
+            streams = [stream for stream in source.streams if stream.type in ("video", "audio")]
+            if not any(stream.type == "video" for stream in streams):
+                raise ValueError("文件中没有可投屏的视频轨道")
+            mapping = {stream.index: output.add_stream_from_template(stream) for stream in streams}
+            for packet in source.demux(streams):
+                if packet.dts is None:
+                    continue
+                packet.stream = mapping[packet.stream.index]
+                output.mux(packet)
+
+
+class _RemuxSignals(QObject):
+    finished = Signal(int, object, object, object)
+
+
+class _RemuxJob(QRunnable):
+    def __init__(self, generation: int, source: Path):
+        super().__init__()
+        self.generation = generation
+        self.source = source
+        self.signals = _RemuxSignals()
+
+    def run(self) -> None:
+        fd, name = tempfile.mkstemp(prefix="yingxu-airplay-", suffix=".mp4")
+        os.close(fd)
+        output = Path(name)
+        try:
+            remux_to_mp4(self.source, output)
+        except Exception as exc:
+            output.unlink(missing_ok=True)
+            self.signals.finished.emit(self.generation, self.source, None, str(exc))
+        else:
+            self.signals.finished.emit(self.generation, self.source, output, None)
 
 
 class AirPlayButton(QWidget):
@@ -35,7 +76,8 @@ class AirPlayButton(QWidget):
 
     def bind(self, player) -> None:
         self._ensure_picker()
-        self._picker.setPlayer_(player)
+        if self._picker is not None:
+            self._picker.setPlayer_(player)
 
     def _ensure_picker(self) -> None:
         if self._picker is not None or sys.platform != "darwin" or QGuiApplication.platformName() != "cocoa":
@@ -58,10 +100,15 @@ class AirPlayButton(QWidget):
             self._picker.setFrame_(self._native_view.bounds())
 
 
-class AirPlaySession:
+class AirPlaySession(QObject):
     """AVPlayer state used only while an AirPlay route is active."""
 
+    remux_finished = Signal(object, object)
+    picker_opened = Signal()
+    picker_closed = Signal()
+
     def __init__(self, button: AirPlayButton):
+        super().__init__()
         if sys.platform != "darwin" or QGuiApplication.platformName() != "cocoa":
             raise RuntimeError("AirPlay is available on macOS only")
         from AVFoundation import AVPlayer, AVPlayerItem
@@ -72,22 +119,107 @@ class AirPlaySession:
         self.player.setAllowsExternalPlayback_(True)
         self.player.setAllowsAirPlayVideo_(True)
         button.bind(self.player)
-        self._path: Path | None = None
+        self._pool = QThreadPool.globalInstance()
+        self._generation = 0
+        self._source_path: Path | None = None
+        self._prepared_path: Path | None = None
+        self._pending_position = 0.0
+        self._load_error: str | None = None
+        self._closed = False
+        self.remux_finished.connect(self._on_remux_finished)
+        self._install_picker_delegate(button)
 
-    def load(self, path: Path, position: float = 0.0) -> bool:
+    def _install_picker_delegate(self, button: AirPlayButton) -> None:
+        """Start muted playback while the route menu is open; AirPlay needs an active item."""
+        import objc
+        from Foundation import NSObject
+
+        session = self
+
+        class RoutePickerDelegate(NSObject):
+            @objc.typedSelector(b"v@:@")
+            def routePickerViewWillBeginPresentingRoutes_(self, picker):
+                session.picker_opened.emit()
+
+            @objc.typedSelector(b"v@:@")
+            def routePickerViewDidEndPresentingRoutes_(self, picker):
+                session.picker_closed.emit()
+
+        self._picker_delegate = RoutePickerDelegate.alloc().init()
+        if button._picker is not None:
+            button._picker.setDelegate_(self._picker_delegate)
+
+    @property
+    def source_path(self) -> Path | None:
+        return self._source_path
+
+    @property
+    def load_error(self) -> str | None:
+        return self._load_error
+
+    def load(self, path: Path, position: float = 0.0) -> str:
+        """Load a directly playable file, or asynchronously remux its streams.
+
+        Returns ``ready``, ``preparing``, or ``unsupported``.
+        """
+        self._generation += 1
+        generation = self._generation
+        self._clear_item()
+        self._source_path = path
+        self._pending_position = max(0.0, position)
+        self._load_error = None
         if not can_airplay(path):
-            self._path = None
-            self.player.replaceCurrentItemWithPlayerItem_(None)
-            return False
+            self._source_path = None
+            return "unsupported"
+        if path.suffix.lower() in DIRECT_SUFFIXES:
+            self._replace_with_file(path, position)
+            return "ready" if self.is_ready() else "preparing"
+
+        job = _RemuxJob(generation, path)
+        job.signals.finished.connect(self.remux_finished.emit)
+        self._pool.start(job)
+        return "preparing"
+
+    def _on_remux_finished(self, generation: int, source: Path, output: Path | None, error: str | None):
+        if self._closed or generation != self._generation or source != self._source_path:
+            if output is not None:
+                Path(output).unlink(missing_ok=True)
+            return
+        if error is not None or output is None:
+            self._load_error = error or "媒体文件无法转换为 AirPlay 格式"
+            return
+        self._prepared_path = Path(output)
+        self._replace_with_file(self._prepared_path, self._pending_position)
+
+    def _replace_with_file(self, path: Path, position: float) -> None:
         from Foundation import NSURL
 
         url = NSURL.fileURLWithPath_(str(path.resolve()))
         item = self._AVPlayerItem.playerItemWithURL_(url)
         self.player.replaceCurrentItemWithPlayerItem_(item)
-        self._path = path
         self.seek(position)
         self.player.pause()
-        return True
+
+    def _clear_item(self) -> None:
+        self.player.pause()
+        self.player.replaceCurrentItemWithPlayerItem_(None)
+        if self._prepared_path is not None:
+            self._prepared_path.unlink(missing_ok=True)
+            self._prepared_path = None
+
+    def is_ready(self) -> bool:
+        item = self.player.currentItem()
+        return item is not None and int(item.status()) == 1  # AVPlayerItemStatusReadyToPlay
+
+    def item_failed(self) -> bool:
+        item = self.player.currentItem()
+        return item is not None and int(item.status()) == 2
+
+    def item_error(self) -> str:
+        item = self.player.currentItem()
+        if item is None or item.error() is None:
+            return self._load_error or "AVPlayer 无法播放此编码"
+        return str(item.error().localizedDescription())
 
     def is_active(self) -> bool:
         try:
@@ -131,6 +263,7 @@ class AirPlaySession:
             self.player.pause()
 
     def close(self) -> None:
-        self.player.pause()
-        self.player.replaceCurrentItemWithPlayerItem_(None)
+        self._closed = True
+        self._generation += 1
+        self._clear_item()
         self.button.bind(None)
