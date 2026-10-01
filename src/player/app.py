@@ -115,20 +115,21 @@ def _app_icon_path() -> Path:
 
 def main() -> int:
     args, smoke, media_path = parse_launch_args(sys.argv)
-    single_instance = None
-    if not smoke:
-        single_instance = SingleInstance("dev.yingxu.player")
-        if not single_instance.is_primary:
-            if single_instance.forward(str(media_path) if media_path is not None else None):
-                return 0
-            raise RuntimeError("映序已在运行，但无法连接到现有进程")
-
     patch_find_library()  # 必须在 mpv 绑定首次加载前生效
     _apply_surface_format()
     # 保留旧配置命名，升级品牌时不改变现有设置与缓存目录。
     QApplication.setOrganizationName("Player")
     QApplication.setApplicationName("Player")
     app = QApplication(args)
+    single_instance = None
+    if not smoke:
+        # QLocalServer needs a live Qt application to register its event notifier.
+        single_instance = SingleInstance("dev.yingxu.player")
+        if not single_instance.is_primary:
+            if single_instance.forward(str(media_path) if media_path is not None else None):
+                return 0
+            raise RuntimeError("映序已在运行，但无法连接到现有进程")
+
     from PySide6.QtGui import QIcon
 
     app.setWindowIcon(QIcon(str(_app_icon_path())))
