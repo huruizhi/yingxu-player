@@ -64,6 +64,7 @@ class Playback(QObject):
                 vo=video_out,  # libmpv=画面交给渲染上下文；null 供无渲染测试
                 hwdec="auto-safe",  # macOS 上自动启用 VideoToolbox 硬解
                 keep_open="yes",  # 播到结尾停在最后一帧，由应用决定连播
+                stop_screensaver="yes",  # 播放视频时阻止屏幕保护程序启动
                 idle="yes",
                 osc=False,  # 使用自绘控制栏
                 audio_display="no",

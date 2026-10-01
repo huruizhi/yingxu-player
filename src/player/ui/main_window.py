@@ -20,8 +20,9 @@ from player.ai.skip import CreditsSkipper
 from player.ai.subtitles import SubtitleStore
 from player.ai.transcriber import Transcriber
 from player.ai.whisper_backend import WhisperBackend
+from player.core.display_sleep import DisplaySleepInhibitor
 from player.core.playback import Playback
-from player.core.playlist import LoopMode, Playlist, scan_media_files
+from player.core.playlist import VIDEO_EXTENSIONS, LoopMode, Playlist, scan_media_files
 from player.core.settings import AI_MODELS, Settings, SubtitleSource
 from player.core.store import Store
 from player.ui.icons import icon
@@ -61,6 +62,7 @@ class MainWindow(QMainWindow):
         self.skipper.on_skip = self._advance_to_next
 
         self.playback = playback if playback is not None else Playback(self)
+        self._display_sleep_inhibitor = DisplaySleepInhibitor()
         self._stt: WhisperBackend | None = None
         self._stt_model_size: str | None = None
         self._transcriber: Transcriber | None = None
@@ -466,6 +468,7 @@ class MainWindow(QMainWindow):
         if nxt is not None:
             self.play_path(nxt)
         elif self._current_file is not None:
+            self._display_sleep_inhibitor.close()
             self.video_area.show_osd("播放结束")
 
     # ================= 播放回调 =================
@@ -473,6 +476,7 @@ class MainWindow(QMainWindow):
     def _on_file_changed(self, path: str) -> None:
         if not self._current_file or Path(path) != self._current_file.resolve():
             self._current_file = Path(path)
+        self._sync_display_sleep_inhibitor()
         self.video_area.control_bar.set_paused(self.playback.is_paused())
         # 载入时轨道信息尚未就绪，先按"无内置字幕"预应用一次；
         # track-list 事件到达后 _on_tracks_changed 会再校正
@@ -482,6 +486,15 @@ class MainWindow(QMainWindow):
         self.video_area.control_bar.set_paused(paused)
         self._auto_hide.force_show()  # 暂停时控制层保持可见
         self._apply_controls_visibility()
+        self._sync_display_sleep_inhibitor()
+
+    def _sync_display_sleep_inhibitor(self) -> None:
+        playing_video = (
+            self._current_file is not None
+            and self._current_file.suffix.lower() in VIDEO_EXTENSIONS
+            and not self.playback.is_paused()
+        )
+        self._display_sleep_inhibitor.set_playing_video(playing_video)
 
     def _on_duration_changed(self, duration: float) -> None:
         self.timeline.set_position(self.playback.position() or 0.0, duration)
@@ -853,6 +866,7 @@ class MainWindow(QMainWindow):
         self.settings.save()
         self._save_progress_now()
         self._stop_transcriber(wait_timeout=8.0)
+        self._display_sleep_inhibitor.close()
         self.video_area.mpv_widget.shutdown()
         self.playback.terminate()
         super().closeEvent(event)
