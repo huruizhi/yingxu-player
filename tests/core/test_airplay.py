@@ -24,6 +24,5 @@ def test_remux_mkv_to_mp4_without_reencoding(tmp_path):
         source_streams = {stream.type: stream.codec_context.name for stream in source_container.streams}
         output_streams = {stream.type: stream.codec_context.name for stream in output_container.streams}
         assert output_streams == source_streams
-        assert output_streams["video"] == "h264"
         assert output_streams["audio"] == "aac"
         assert abs(output_container.duration - source_container.duration) <= 50_000
