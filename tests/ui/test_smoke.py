@@ -133,3 +133,14 @@ def test_playlist_button_unchecks_when_drawer_auto_hides(window, qtbot):
     qtbot.waitUntil(lambda: not drawer.isVisible(), timeout=1500)
     assert not window.playlist_btn.isChecked()
     window.close()
+
+
+def test_secondary_launch_opens_media_in_existing_window(window, monkeypatch):
+    opened = []
+    monkeypatch.setattr(window, "open_path", opened.append)
+
+    window.handle_secondary_launch("/Movies/Second.mkv")
+
+    assert window.isVisible()
+    assert opened == [Path("/Movies/Second.mkv")]
+    window.close()

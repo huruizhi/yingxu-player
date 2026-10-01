@@ -455,6 +455,17 @@ class MainWindow(QMainWindow):
         if self._pending_resume:
             self.video_area.show_osd(f"已恢复到上次进度 {_fmt_time(self._pending_resume)}")
 
+    def handle_secondary_launch(self, path: str | None) -> None:
+        """Show this window and handle a file-open request from another launch."""
+        if self.isMinimized():
+            self.showNormal()
+        else:
+            self.show()
+        self.raise_()
+        self.activateWindow()
+        if path:
+            self.open_path(Path(path))
+
     def _play_sibling(self, direction: int) -> None:
         nxt = self.playlist.next() if direction > 0 else self.playlist.previous()
         if nxt is not None:

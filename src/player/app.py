@@ -153,18 +153,7 @@ def main() -> int:
     window = MainWindow(settings, store, subtitle_cache)
 
     if single_instance is not None:
-
-        def handle_secondary_launch(path: str | None) -> None:
-            if window.isMinimized():
-                window.showNormal()
-            else:
-                window.show()
-            window.raise_()
-            window.activateWindow()
-            if path:
-                window.open_path(Path(path))
-
-        single_instance.request_received.connect(handle_secondary_launch)
+        single_instance.request_received.connect(window.handle_secondary_launch)
 
     if smoke:
         window.transcriber_status.connect(lambda text: print(f"[smoke][ai] {text}", flush=True))
