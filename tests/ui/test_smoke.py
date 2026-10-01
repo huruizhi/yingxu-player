@@ -5,6 +5,7 @@ scripts/smoke_ai.py 单独验证。
 """
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -65,6 +66,49 @@ def test_recent_directory_shortcut_opens_saved_directory(window, monkeypatch):
     window.video_area.empty_state.recent_layout.itemAt(1).widget().click()
 
     assert opened == [MEDIA]
+    window.close()
+
+
+def test_airplay_preparation_stays_silent_while_controls_are_hidden(window, monkeypatch):
+    window._current_file = MEDIA / "plain.mkv"
+    window._airplay = SimpleNamespace(
+        source_path=window._current_file,
+        item_failed=lambda: False,
+        load_error=None,
+        is_ready=lambda: True,
+        close=lambda: None,
+    )
+    messages = []
+    monkeypatch.setattr(window.video_area, "show_osd", messages.append)
+    button = window.video_area.control_bar.airplay_btn
+    button.hide()
+    window.video_area.control_bar.hide()
+
+    window._sync_airplay_availability()
+    window._sync_airplay_availability()
+
+    assert not button.isHidden()
+    assert messages == []
+    window._airplay = None
+    window.close()
+
+
+def test_airplay_background_failure_stays_silent(window, monkeypatch):
+    window._current_file = MEDIA / "plain.mkv"
+    window._airplay = SimpleNamespace(
+        source_path=window._current_file,
+        item_failed=lambda: True,
+        load_error="unsupported codec",
+        close=lambda: None,
+    )
+    messages = []
+    monkeypatch.setattr(window.video_area, "show_osd", messages.append)
+
+    window._sync_airplay_availability()
+
+    assert window.video_area.control_bar.airplay_btn.isHidden()
+    assert messages == []
+    window._airplay = None
     window.close()
 
 

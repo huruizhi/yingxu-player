@@ -66,7 +66,6 @@ class MainWindow(QMainWindow):
         self._airplay: AirPlaySession | None = None
         self._airplay_active = False
         self._airplay_was_playing = False
-        self._airplay_error_reported_for: Path | None = None
         self._display_sleep_inhibitor = DisplaySleepInhibitor()
         self._stt: WhisperBackend | None = None
         self._stt_model_size: str | None = None
@@ -480,7 +479,6 @@ class MainWindow(QMainWindow):
         self.video_area.set_empty_state(False)
         self.video_area.set_media_title(path.name)
         self.video_area.control_bar.airplay_btn.hide()
-        self._airplay_error_reported_for = None
 
         self.subtitles.clear_runtime()
         self.video_area.timeline.set_covered([])
@@ -916,15 +914,12 @@ class MainWindow(QMainWindow):
             return
         if self._airplay.item_failed() or self._airplay.load_error:
             button.hide()
-            if self._airplay_error_reported_for != self._current_file:
-                self.video_area.show_osd(f"此文件无法直投：{self._airplay.item_error()}")
-                self._airplay_error_reported_for = self._current_file
             return
         ready = self._airplay.is_ready()
-        if button.isVisible() != ready:
+        # isVisible() also becomes false when the auto-hidden control bar is hidden.
+        # Track the button's own visibility so background readiness stays silent.
+        if button.isHidden() == ready:
             button.setVisible(ready)
-            if ready:
-                self.video_area.show_osd("AirPlay 已准备好，可选择电视")
 
     def _on_scrub_finished(self, seconds: float) -> None:
         self.playback.seek_absolute(seconds, exact=False)
