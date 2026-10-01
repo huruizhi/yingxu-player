@@ -2,6 +2,14 @@
 
 本项目的所有重要变更将记录在此文件中。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.1.5] - 2026-10-01
+
+### Added
+
+- 新增 macOS 原生 AirPlay 设备选择器，可将 MP4、M4V、MOV 视频直投到电视，并同步常用播放控制。
+- 投屏时切换到 AVFoundation，结束投屏后恢复 mpv 本机播放；MKV 等格式保留本机播放。
+- 在 README 中说明 AirPlay 容器与字幕支持范围。
+
 ## [0.1.4] - 2026-10-01
 
 ### Fixed
