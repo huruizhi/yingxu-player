@@ -46,7 +46,9 @@ class VideoArea(QWidget):
         self.media_title.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.media_title.setVisible(False)
         self.control_bar = ControlBar(self)
-        self.timeline = TimelineSlider(self.control_bar)
+        # 进度条直接浮在视频上（UI v2 设计）：半透明轨道能透出画面，
+        # 不放进控制条胶囊——背后是深色面板会让透视效果失效
+        self.timeline = TimelineSlider(self)
         self.drawer = PlaylistDrawer(self)
         self.osd = OsdLabel(self)
         self.empty_state = EmptyState(self)
@@ -130,9 +132,9 @@ class VideoArea(QWidget):
         margin = 24 if self._fullscreen else 20
         cw = min(900, max(340, w - 2 * margin))
         ch = self.control_bar.height()
-        self.control_bar.setGeometry((w - cw) // 2, h - ch - margin, cw, ch)
+        self.control_bar.setGeometry((w - cw) // 2, h - _TIMELINE_H - ch - margin, cw, ch)
         self.control_bar.set_compact(w < 690)
-        self.timeline.setGeometry(18, 8, cw - 36, _TIMELINE_H)
+        self.timeline.setGeometry(0, h - _TIMELINE_H, w, _TIMELINE_H)
         self.media_title.move(margin, margin)
         self.status_chip.move(margin, margin + 30)
         self._place_subtitle()
