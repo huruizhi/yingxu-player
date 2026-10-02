@@ -1,12 +1,16 @@
 """播放内核新增能力：截图、音画同步、画面调整、AB 循环、章节。
 
 使用 vo=null 的真实 mpv：这些能力全部是属性/命令层，不依赖渲染。
-共享模块级实例，避免在 CI 上高频创建/销毁 mpv 进程内上下文。
+共享模块级实例，避免在 CI 上高频创建/销毁 mpv 进程内上下文；
+且必须先建 QApplication（与生产启动顺序一致）再创建 mpv 实例——
+CI runner 上"先建 mpv 后建 QApplication"的进程会在后续 mpv 创建时段错误。
 """
 
 import pytest
 
 from player.core.playback import Playback
+
+pytestmark = pytest.mark.usefixtures("qapp")
 
 
 @pytest.fixture(scope="module")
