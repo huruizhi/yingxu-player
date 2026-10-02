@@ -15,6 +15,8 @@ OVERLAY_BG = "rgba(25, 27, 32, 0.97)"
 OVERLAY_BG_SOLID = QColor(25, 27, 32, 247)
 TRACK_BG = QColor(255, 255, 255, 48)
 COVERED_TINT = QColor(111, 163, 255, 76)
+LOOP_TINT = QColor(102, 204, 153, 88)
+CHAPTER_TICK = QColor(255, 255, 255, 140)
 PLAYED_COLOR = ACCENT
 
 # ---- 应用级样式（菜单/提示）----

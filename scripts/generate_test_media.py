@@ -51,6 +51,41 @@ def main() -> None:
                 "srt",
             )
 
+    # 带章节的独立目录，避免混入 media/ 后改变既有播放列表数量的断言
+    chapter_dir = OUTPUT.parent / "media_chapters"
+    chapter_dir.mkdir(parents=True, exist_ok=True)
+    chapters_target = chapter_dir / "chapters.mkv"
+    if not chapters_target.exists():
+        with tempfile.TemporaryDirectory(prefix="yingxu-test-media-") as temp_dir:
+            metadata = Path(temp_dir) / "chapters.txt"
+            metadata.write_text(
+                ";FFMETADATA1\n"
+                "[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=4000\ntitle=开场\n"
+                "[CHAPTER]\nTIMEBASE=1/1000\nSTART=4000\nEND=8000\ntitle=中段\n"
+                "[CHAPTER]\nTIMEBASE=1/1000\nSTART=8000\nEND=12000\ntitle=结尾\n",
+                encoding="utf-8",
+            )
+            _generate_if_missing(
+                chapters_target,
+                "-f",
+                "lavfi",
+                "-i",
+                video,
+                "-f",
+                "lavfi",
+                "-i",
+                audio,
+                "-i",
+                str(metadata),
+                "-map",
+                "0:v",
+                "-map",
+                "1:a",
+                "-map_chapters",
+                "2",
+                *common,
+            )
+
 
 if __name__ == "__main__":
     main()

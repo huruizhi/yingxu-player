@@ -1,15 +1,16 @@
 """时间轴细进度条：贴底细线，悬停变粗，拖拽 seek，AI 已转写区间淡色高亮。
 
+另叠加章节刻度（细白线）与 AB 循环区间（淡绿色）。
 当前时间与总时长内嵌于线条两端（Aurora 式布局）。
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, Qt, Signal
-from PySide6.QtGui import QPainter
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtGui import QPainter, QPen
 from PySide6.QtWidgets import QLabel, QWidget
 
-from player.ui.theme import COVERED_TINT, PLAYED_COLOR, TRACK_BG
+from player.ui.theme import CHAPTER_TICK, COVERED_TINT, LOOP_TINT, PLAYED_COLOR, TRACK_BG
 
 _BAR_THIN = 4
 _BAR_THICK = 10
@@ -37,6 +38,8 @@ class TimelineSlider(QWidget):
         self._position = 0.0
         self._duration = 0.0
         self._covered: list[tuple[float, float]] = []
+        self._chapters: list[float] = []
+        self._loop_range: tuple[float, float] | None = None
         self._hovered = False
         self._scrubbing = False
         self.setMouseTracking(True)
@@ -62,6 +65,14 @@ class TimelineSlider(QWidget):
 
     def set_covered(self, ranges: list[tuple[float, float]]) -> None:
         self._covered = list(ranges)
+        self.update()
+
+    def set_chapters(self, times: list[float]) -> None:
+        self._chapters = [float(t) for t in times]
+        self.update()
+
+    def set_loop_range(self, start: float | None, end: float | None) -> None:
+        self._loop_range = (start, end) if start is not None and end is not None else None
         self.update()
 
     # ---- 几何 ----
@@ -99,10 +110,23 @@ class TimelineSlider(QWidget):
             x0, x1 = lo / self._duration * w, min(hi, self._duration) / self._duration * w
             if x1 > x0:
                 painter.drawRoundedRect(QRectF(x0, bar.top(), x1 - x0, bar.height()), radius, radius)
+        if self._loop_range is not None:
+            a, b = self._loop_range
+            x0, x1 = a / self._duration * w, min(b, self._duration) / self._duration * w
+            if x1 > x0:
+                painter.setBrush(LOOP_TINT)
+                painter.drawRoundedRect(QRectF(x0, bar.top(), x1 - x0, bar.height()), radius, radius)
         played_w = min(self._position / self._duration, 1.0) * w
         if played_w > 0:
             painter.setBrush(PLAYED_COLOR)
             painter.drawRoundedRect(QRectF(0, bar.top(), played_w, bar.height()), radius, radius)
+        if self._chapters:
+            painter.setPen(QPen(CHAPTER_TICK, 1.4))
+            for time in self._chapters:
+                if 0 < time < self._duration:
+                    x = time / self._duration * w
+                    painter.drawLine(QPointF(x, bar.top() + 1), QPointF(x, bar.bottom() - 1))
+            painter.setPen(Qt.NoPen)
         if self._hovered or self._scrubbing:
             painter.setBrush(Qt.white)
             painter.drawEllipse(QRectF(played_w - 5, bar.center().y() - 5, 10, 10))

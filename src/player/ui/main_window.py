@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import QFileDialog, QMainWindow, QMenu, QMessageBox, QToolButton
 
@@ -22,7 +23,7 @@ from player.ai.transcriber import Transcriber
 from player.ai.whisper_backend import WhisperBackend
 from player.core.airplay import AirPlaySession, can_airplay
 from player.core.display_sleep import DisplaySleepInhibitor
-from player.core.playback import Playback
+from player.core.playback import ASPECT_PRESETS, ROTATE_STEPS, Playback
 from player.core.playlist import VIDEO_EXTENSIONS, LoopMode, Playlist, scan_media_files
 from player.core.settings import AI_MODELS, Settings, SubtitleSource
 from player.core.store import Store
@@ -33,6 +34,10 @@ from player.updates import LATEST_RELEASE_API, is_newer_version
 
 _TICK_MS = 250
 _PROGRESS_SAVE_TICKS = 20  # ~5 秒落盘一次
+_SYNC_STEP = 0.1  # 音画同步/字幕偏移步长（秒）
+_ZOOM_STEP = 0.1  # log2 尺度，约 ±7% 面积
+_PIP_HEIGHT = 270
+_PIP_MARGIN = 24
 
 
 def _fmt_time(seconds: float | None) -> str:
@@ -83,6 +88,14 @@ class MainWindow(QMainWindow):
         self._update_reply: QNetworkReply | None = None
         self._update_manual = False
         self._update_notice: QMessageBox | None = None
+
+        # 会话内观看调整（换文件时重置，不落盘）
+        self._aspect_override: str | None = None  # None=跟随视频
+        self._video_rotate = 0
+        self._ab_a: float | None = None
+        self._ab_b: float | None = None
+        self._pip_active = False
+        self._pip_restore: dict | None = None
 
         self.setWindowTitle("映序")
         self.setAcceptDrops(True)
@@ -147,10 +160,13 @@ class MainWindow(QMainWindow):
         self._recent_dirs_menu.aboutToShow.connect(self._refresh_recent_directories)
         self.act_export = QAction("导出 AI 字幕 (.srt)…", self)
         self.act_export.setShortcut(QKeySequence("Ctrl+E"))
+        self.act_screenshot = QAction("截图", self)
+        self.act_screenshot.setShortcut(QKeySequence("S"))
+        self.act_screenshot.triggered.connect(self._take_screenshot)
         act_quit = QAction("退出", self)
         act_quit.setShortcut(QKeySequence("Ctrl+Q"))
         act_quit.triggered.connect(self.close)
-        for a in (self.act_open, self.act_open_dir, self.act_export):
+        for a in (self.act_open, self.act_open_dir, self.act_export, self.act_screenshot):
             m_file.addAction(a)
         m_file.addMenu(self._recent_dirs_menu)
         self._refresh_recent_directories()
@@ -183,6 +199,102 @@ class MainWindow(QMainWindow):
         except ValueError:
             self.playlist.set_mode(LoopMode.ALL)
         self._loop_actions[self.playlist.mode].setChecked(True)
+        m_play.addSeparator()
+
+        # 章节
+        self._chapter_menu = m_play.addMenu("章节")
+        self._chapter_menu.aboutToShow.connect(self._rebuild_chapter_menu)
+        self.act_prev_chapter = QAction("上一章", self)
+        self.act_prev_chapter.setShortcut(QKeySequence("Alt+Left"))
+        self.act_prev_chapter.triggered.connect(lambda: self._jump_chapter(-1))
+        self.act_next_chapter = QAction("下一章", self)
+        self.act_next_chapter.setShortcut(QKeySequence("Alt+Right"))
+        self.act_next_chapter.triggered.connect(lambda: self._jump_chapter(+1))
+        self._chapter_menu.addAction(self.act_prev_chapter)
+        self._chapter_menu.addAction(self.act_next_chapter)
+        self._chapter_menu.addSeparator()
+
+        # AB 循环：同一动作在 设A → 设B → 清除 间循环
+        self.act_ab_loop = QAction("标记 AB 循环起点 (L)", self)
+        self.act_ab_loop.setShortcut(QKeySequence("L"))
+        self.act_ab_loop.triggered.connect(self._cycle_ab_loop)
+        m_play.addAction(self.act_ab_loop)
+
+        # 画面：比例/缩放/旋转
+        self._picture_menu = m_play.addMenu("画面")
+        self._aspect_menu = self._picture_menu.addMenu("比例")
+        self._aspect_group = QActionGroup(self._aspect_menu)
+        self._aspect_actions: dict[str | None, QAction] = {}
+        for value, label in ((None, "跟随视频"), *((v, v) for v in ASPECT_PRESETS)):
+            act = QAction(label, self, checkable=True)
+            act.setChecked(value is None)
+            act.triggered.connect(lambda _c, v=value: self._set_aspect_override(v))
+            self._aspect_group.addAction(act)
+            self._aspect_actions[value] = act
+            self._aspect_menu.addAction(act)
+        self.act_zoom_in = QAction("放大", self)
+        self.act_zoom_in.setShortcut(QKeySequence("+"))
+        self.act_zoom_in.triggered.connect(lambda: self._adjust_zoom(+_ZOOM_STEP))
+        self.act_zoom_out = QAction("缩小", self)
+        self.act_zoom_out.setShortcut(QKeySequence("-"))
+        self.act_zoom_out.triggered.connect(lambda: self._adjust_zoom(-_ZOOM_STEP))
+        self.act_zoom_reset = QAction("重置缩放", self)
+        self.act_zoom_reset.triggered.connect(self._reset_zoom)
+        self._picture_menu.addAction(self.act_zoom_in)
+        self._picture_menu.addAction(self.act_zoom_out)
+        self._picture_menu.addAction(self.act_zoom_reset)
+        self._rotate_menu = self._picture_menu.addMenu("旋转")
+        self._rotate_group = QActionGroup(self._rotate_menu)
+        self._rotate_actions: dict[int, QAction] = {}
+        for degrees in ROTATE_STEPS:
+            act = QAction(f"{degrees}°" if degrees else "0°（正常）", self, checkable=True)
+            act.setChecked(degrees == 0)
+            act.triggered.connect(lambda _c, d=degrees: self._set_video_rotate(d))
+            self._rotate_group.addAction(act)
+            self._rotate_actions[degrees] = act
+            self._rotate_menu.addAction(act)
+        self.act_picture_reset = QAction("重置画面调整", self)
+        self.act_picture_reset.triggered.connect(self._reset_picture)
+        self._picture_menu.addSeparator()
+        self._picture_menu.addAction(self.act_picture_reset)
+
+        # 同步：音频/字幕偏移
+        self._sync_menu = m_play.addMenu("同步")
+        for label, slot in (
+            ("音频提前 0.1 秒", lambda: self._adjust_audio_delay(-_SYNC_STEP)),
+            ("音频延后 0.1 秒", lambda: self._adjust_audio_delay(+_SYNC_STEP)),
+            ("重置音频偏移", lambda: self._adjust_audio_delay(0)),
+        ):
+            act = QAction(label, self)
+            act.triggered.connect(slot)
+            self._sync_menu.addAction(act)
+        self.act_audio_early, self.act_audio_late = self._sync_menu.actions()[:2]
+        self.act_audio_early.setShortcut(QKeySequence("["))
+        self.act_audio_late.setShortcut(QKeySequence("]"))
+        self._sync_menu.addSeparator()
+        for label, slot in (
+            ("字幕提前 0.1 秒", lambda: self._adjust_sub_delay(-_SYNC_STEP)),
+            ("字幕延后 0.1 秒", lambda: self._adjust_sub_delay(+_SYNC_STEP)),
+            ("重置字幕偏移", lambda: self._adjust_sub_delay(0)),
+        ):
+            act = QAction(label, self)
+            act.triggered.connect(slot)
+            self._sync_menu.addAction(act)
+        # actions() 序列：音频×3、分隔线、字幕×3 → 下标 4/5 是字幕提前/延后
+        self.act_sub_early, self.act_sub_late = self._sync_menu.actions()[4:6]
+        self.act_sub_early.setShortcut(QKeySequence("Z"))
+        self.act_sub_late.setShortcut(QKeySequence("X"))
+
+        m_play.addSeparator()
+        self.act_topmost = QAction("窗口置顶", self, checkable=True)
+        self.act_topmost.setShortcut(QKeySequence("Ctrl+T"))
+        # triggered 而非 toggled：避免程序性 setChecked（画中画切换）反向触发窗口操作
+        self.act_topmost.triggered.connect(lambda: self._set_topmost(self.act_topmost.isChecked()))
+        m_play.addAction(self.act_topmost)
+        self.act_pip = QAction("画中画", self)
+        self.act_pip.setShortcut(QKeySequence("Ctrl+Shift+P"))
+        self.act_pip.triggered.connect(self._toggle_pip)
+        m_play.addAction(self.act_pip)
         m_play.addSeparator()
         self.act_fullscreen = QAction("进入全屏", self)
         self.act_fullscreen.setShortcut(QKeySequence("F"))
@@ -330,6 +442,8 @@ class MainWindow(QMainWindow):
         bind("Down", lambda: self._change_volume(-5))
         bind("Ctrl+L", self._toggle_playlist)
         bind("Ctrl+S", self.skipper.manual_skip)
+        bind("A", self._cycle_aspect_override)
+        bind("R", self._cycle_rotate)
         bind("Escape", self._exit_fullscreen_if_needed)
 
         self.prev_btn.clicked.connect(lambda: self._play_sibling(-1))
@@ -342,6 +456,7 @@ class MainWindow(QMainWindow):
         self.act_mark.triggered.connect(self._mark_credits)
         self.act_clear_mark.triggered.connect(self._clear_credits)
         self.playlist_btn.clicked.connect(self._toggle_playlist)
+        self.video_area.control_bar.pip_btn.clicked.connect(self._toggle_pip)
         self.video_area.drawer.visibility_changed.connect(self.playlist_btn.setChecked)
         self.video_area.control_bar.fullscreen_btn.clicked.connect(self.toggle_fullscreen)
         self.act_open.triggered.connect(self._open_file_dialog)
@@ -370,6 +485,7 @@ class MainWindow(QMainWindow):
         self.playback.paused_changed.connect(self._on_paused_changed)
         self.playback.duration_changed.connect(self._on_duration_changed)
         self.playback.tracks_changed.connect(self._on_tracks_changed)
+        self.playback.chapters_changed.connect(self._on_chapters_changed)
         self.playback.end_reached.connect(self._on_end_reached)
         self.playback.file_changed.connect(self._on_file_changed)
 
@@ -405,6 +521,8 @@ class MainWindow(QMainWindow):
         if self.isFullScreen():
             self.showNormal()
         else:
+            if self._pip_active:
+                self._exit_pip()
             self.showFullScreen()
         fullscreen = self.isFullScreen()
         self.video_area.set_fullscreen(fullscreen)
@@ -419,6 +537,8 @@ class MainWindow(QMainWindow):
     def _exit_fullscreen_if_needed(self) -> None:
         if self.isFullScreen():
             self.toggle_fullscreen()
+        elif self._pip_active:
+            self._exit_pip()
 
     # ================= 打开与播放 =================
 
@@ -474,6 +594,7 @@ class MainWindow(QMainWindow):
         self._save_progress_now()
         self._current_file = path
         self._ai_override = None
+        self._reset_per_file_adjustments()
         self._pending_resume = self.store.get_progress(path)
         self._subtitles_loaded_from_cache = False
         self.video_area.set_empty_state(False)
@@ -834,6 +955,260 @@ class MainWindow(QMainWindow):
             parts.append(f"[{track.lang}]")
         return " ".join(parts)
 
+    # ================= 观看调整：换文件重置 =================
+
+    def _reset_per_file_adjustments(self) -> None:
+        """与 Playback.load() 的属性重置保持一致的 UI 状态。"""
+        self._aspect_override = None
+        self._video_rotate = 0
+        self._ab_a = None
+        self._ab_b = None
+        self._apply_ab_loop()
+        self._sync_picture_menus()
+        self.timeline.set_chapters([])
+
+    def _sync_picture_menus(self) -> None:
+        for value, act in self._aspect_actions.items():
+            act.setChecked(value == self._aspect_override)
+        for degrees, act in self._rotate_actions.items():
+            act.setChecked(degrees == self._video_rotate)
+
+    # ================= 截图 =================
+
+    def _screenshot_directory(self) -> Path:
+        return Path.home() / "Pictures" / "映序"
+
+    def _take_screenshot(self) -> None:
+        if self._current_file is None:
+            self.video_area.show_osd("先打开视频才能截图")
+            return
+        if not self.playback.tracks("video"):
+            self.video_area.show_osd("音频文件没有画面，无法截图")
+            return
+        directory = self._screenshot_directory()
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self.video_area.show_osd(f"无法创建截图目录：{exc}")
+            return
+        stem = self._current_file.stem
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        path = directory / f"{stem} {stamp}.png"
+        counter = 2
+        while path.exists():
+            path = directory / f"{stem} {stamp}-{counter}.png"
+            counter += 1
+        if self.playback.screenshot_to_file(path):
+            self.video_area.show_osd(f"已保存截图：{path.name}")
+        else:
+            self.video_area.show_osd("截图失败")
+
+    # ================= 音画同步 =================
+
+    def _adjust_sub_delay(self, delta: float) -> None:
+        value = 0.0 if delta == 0 else round(self.playback.sub_delay() + delta, 3)
+        self.playback.set_sub_delay(value)
+        self.video_area.show_osd("字幕偏移已重置" if value == 0 else f"字幕偏移 {value:+.1f}s")
+
+    def _adjust_audio_delay(self, delta: float) -> None:
+        value = 0.0 if delta == 0 else round(self.playback.audio_delay() + delta, 3)
+        self.playback.set_audio_delay(value)
+        self.video_area.show_osd("音频偏移已重置" if value == 0 else f"音频偏移 {value:+.1f}s")
+
+    # ================= 画面调整 =================
+
+    def _set_aspect_override(self, value: str | None) -> None:
+        self._aspect_override = value
+        self.playback.set_aspect_override(value)
+        self._sync_picture_menus()
+        self.video_area.show_osd("画面比例：跟随视频" if value is None else f"画面比例 {value}")
+
+    def _cycle_aspect_override(self) -> None:
+        order: list[str | None] = [None, *ASPECT_PRESETS]
+        try:
+            index = order.index(self._aspect_override)
+        except ValueError:
+            index = 0
+        self._set_aspect_override(order[(index + 1) % len(order)])
+
+    def _set_video_rotate(self, degrees: int) -> None:
+        self._video_rotate = degrees
+        self.playback.set_video_rotate(degrees)
+        self._sync_picture_menus()
+        self.video_area.show_osd("画面旋转已重置" if degrees == 0 else f"画面旋转 {degrees}°")
+
+    def _cycle_rotate(self) -> None:
+        index = ROTATE_STEPS.index(self._video_rotate) if self._video_rotate in ROTATE_STEPS else 0
+        self._set_video_rotate(ROTATE_STEPS[(index + 1) % len(ROTATE_STEPS)])
+
+    def _adjust_zoom(self, delta: float) -> None:
+        zoom = self.playback.adjust_video_zoom(delta)
+        self.video_area.show_osd(f"画面缩放 {round(2**zoom * 100)}%")
+
+    def _reset_zoom(self) -> None:
+        self.playback.reset_video_zoom()
+        self.video_area.show_osd("画面缩放 100%")
+
+    def _reset_picture(self) -> None:
+        self._aspect_override = None
+        self._video_rotate = 0
+        self.playback.set_aspect_override(None)
+        self.playback.reset_video_zoom()
+        self.playback.set_video_rotate(0)
+        self._sync_picture_menus()
+        self.video_area.show_osd("画面调整已重置")
+
+    # ================= AB 循环 =================
+
+    def _cycle_ab_loop(self) -> None:
+        if self._ab_a is None:
+            position = self._current_position()
+            if position is None:
+                self.video_area.show_osd("先打开视频再使用 AB 循环")
+                return
+            self._ab_a = position
+            self._apply_ab_loop()
+            self.video_area.show_osd(f"已标记 A 点 {_fmt_time(position)}")
+            return
+        if self._ab_b is None:
+            position = self._current_position()
+            if position is None:
+                return
+            if position <= self._ab_a:
+                self.video_area.show_osd("B 点需要晚于 A 点")
+                return
+            self._ab_b = position
+            self._apply_ab_loop()
+            self.video_area.show_osd(f"AB 循环 {_fmt_time(self._ab_a)} – {_fmt_time(self._ab_b)}")
+            return
+        self._ab_a = None
+        self._ab_b = None
+        self._apply_ab_loop()
+        self.video_area.show_osd("已清除 AB 循环")
+
+    def _apply_ab_loop(self) -> None:
+        self.playback.set_ab_loop(self._ab_a, self._ab_b)
+        self.timeline.set_loop_range(self._ab_a, self._ab_b)
+        if self._ab_a is None:
+            self.act_ab_loop.setText("标记 AB 循环起点 (L)")
+        elif self._ab_b is None:
+            self.act_ab_loop.setText("标记 AB 循环终点 (L)")
+        else:
+            self.act_ab_loop.setText("清除 AB 循环 (L)")
+
+    # ================= 章节 =================
+
+    def _on_chapters_changed(self) -> None:
+        self.timeline.set_chapters([chapter.time for chapter in self.playback.chapters()])
+
+    def _rebuild_chapter_menu(self) -> None:
+        # 前 3 项（上一章/下一章/分隔线）固定，仅重建其后的章节列表
+        while len(self._chapter_menu.actions()) > 3:
+            self._chapter_menu.removeAction(self._chapter_menu.actions()[3])
+        chapters = self.playback.chapters()
+        if not chapters:
+            empty = QAction("（无章节信息）", self._chapter_menu)
+            empty.setEnabled(False)
+            self._chapter_menu.addAction(empty)
+            return
+        current = self.playback.current_chapter()
+        for chapter in chapters:
+            title = chapter.title or f"章节 {chapter.index + 1}"
+            act = QAction(
+                f"{chapter.index + 1}. {title}  {_fmt_time(chapter.time)}", self._chapter_menu, checkable=True
+            )
+            act.setChecked(chapter.index == current)
+            act.triggered.connect(lambda _c, i=chapter.index: self._select_chapter(i))
+            self._chapter_menu.addAction(act)
+
+    def _select_chapter(self, index: int) -> None:
+        chapters = self.playback.chapters()
+        if not 0 <= index < len(chapters):
+            return
+        self.playback.select_chapter(index)
+        title = chapters[index].title or f"章节 {index + 1}"
+        self.video_area.show_osd(f"章节 {index + 1}/{len(chapters)}：{title}")
+
+    def _jump_chapter(self, delta: int) -> None:
+        chapters = self.playback.chapters()
+        current = self.playback.current_chapter()
+        if not chapters or current is None:
+            self.video_area.show_osd("该文件没有章节信息")
+            return
+        target = min(len(chapters) - 1, max(0, current + delta))
+        self._select_chapter(target)
+
+    # ================= 窗口置顶与画中画 =================
+
+    def _set_topmost(self, on: bool) -> None:
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, on)
+        self.show()
+        self.video_area.show_osd("窗口置顶：开" if on else "窗口置顶：关")
+
+    def _toggle_pip(self) -> None:
+        if self._pip_active:
+            self._exit_pip()
+        else:
+            self._enter_pip()
+
+    def _pip_target_size(self) -> tuple[int, int]:
+        size = self.playback.video_size()
+        ratio = size[0] / size[1] if size and size[1] else 16 / 9
+        height = _PIP_HEIGHT
+        return max(320, int(height * ratio)), height
+
+    def _enter_pip(self) -> None:
+        if self._current_file is None:
+            self.video_area.show_osd("先打开视频再使用画中画")
+            return
+        was_maximized = self.isMaximized()
+        self._pip_restore = {
+            "geometry": self.geometry(),
+            "maximized": was_maximized,
+            "topmost": self.act_topmost.isChecked(),
+        }
+        if self.isFullScreen():
+            self.showNormal()
+        width, height = self._pip_target_size()
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        available = screen.availableGeometry()
+        width = min(width, available.width() - 2 * _PIP_MARGIN)
+        height = min(height, available.height() - 2 * _PIP_MARGIN)
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        self.act_topmost.setChecked(True)
+        self.video_area.hide_playlist()
+        if was_maximized:
+            self.showNormal()
+        self.resize(width, height)
+        self.move(available.right() - width - _PIP_MARGIN, available.bottom() - height - _PIP_MARGIN)
+        self.show()
+        self._pip_active = True
+        self.act_pip.setText("退出画中画")
+        self.video_area.control_bar.set_pip_active(True)
+        self._auto_hide.force_show()
+        self._apply_controls_visibility()
+        self.video_area.show_osd("已进入画中画（Esc 或再次点击退出）")
+
+    def _exit_pip(self) -> None:
+        restore = self._pip_restore or {}
+        self._pip_restore = None
+        self._pip_active = False
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, bool(restore.get("topmost")))
+        self.act_topmost.setChecked(bool(restore.get("topmost")))
+        self.act_pip.setText("画中画")
+        self.video_area.control_bar.set_pip_active(False)
+        geometry = restore.get("geometry")
+        if restore.get("maximized"):
+            self.showMaximized()
+        elif geometry is not None:
+            self.setGeometry(geometry)
+        else:
+            self.resize(1120, 700)
+        self.show()
+        self._auto_hide.force_show()
+        self._apply_controls_visibility()
+        self.video_area.show_osd("已退出画中画")
+
     # ================= 片尾 =================
 
     def _mark_credits(self) -> None:
@@ -1039,13 +1414,18 @@ class MainWindow(QMainWindow):
         self.settings.volume = self.volume_slider.value()
         if self.isFullScreen():
             self.showNormal()
-        geo = self.geometry()
+        if self._pip_active and self._pip_restore is not None:
+            geo = self._pip_restore["geometry"]
+            maximized = bool(self._pip_restore.get("maximized"))
+        else:
+            geo = self.geometry()
+            maximized = self.isMaximized()
         self.settings.window = {
             "x": geo.x(),
             "y": geo.y(),
             "w": geo.width(),
             "h": geo.height(),
-            "maximized": self.isMaximized(),
+            "maximized": maximized,
         }
         self.settings.playlist_mode = self.playlist.mode.value
         self.settings.save()

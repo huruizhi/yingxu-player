@@ -34,6 +34,7 @@ class ControlBar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("controlBar")
+        self._pip_active = False
         self.setAttribute(Qt.WA_StyledBackground, True)  # 普通 QWidget 画 QSS 背景必需
         self.setStyleSheet(OVERLAY_QSS)
 
@@ -83,11 +84,13 @@ class ControlBar(QWidget):
         self.fullscreen_btn = _button("fullscreen", "全屏 (F)")
         self.airplay_btn = AirPlayButton()
         self.playlist_btn = _button("playlist", "播放列表 (Ctrl+L)", checkable=True)
+        self.pip_btn = _button("pip", "画中画 (Ctrl+Shift+P)", checkable=True)
         for widget in (
             self.volume_icon,
             self.volume_slider,
             self.airplay_btn,
             self.playlist_btn,
+            self.pip_btn,
             self.fullscreen_btn,
         ):
             right_l.addWidget(widget)
@@ -113,4 +116,14 @@ class ControlBar(QWidget):
         narrow = self.width() < 460
         self.subtitle_btn.setVisible(not narrow)
         self.speed_btn.setVisible(not narrow)
+        # 画中画模式下窗口本身很窄，退出按钮必须保留
+        self.pip_btn.setVisible(not narrow or self._pip_active)
         self._grid.setHorizontalSpacing(6 if narrow else 12)
+
+    def set_pip_active(self, active: bool) -> None:
+        self._pip_active = active
+        self.pip_btn.setChecked(active)
+        tip = "退出画中画 (Ctrl+Shift+P)" if active else "画中画 (Ctrl+Shift+P)"
+        self.pip_btn.setToolTip(tip)
+        self.pip_btn.setAccessibleName(tip.split(" (")[0])
+        self.set_compact(self.width() < 460)

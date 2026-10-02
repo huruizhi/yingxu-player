@@ -18,7 +18,12 @@ from PySide6.QtCore import QObject, Signal
 
 from player.core.libmpv import patch_find_library
 
-OBSERVED_PROPERTIES = ("time-pos", "duration", "pause", "eof-reached", "track-list", "path")
+OBSERVED_PROPERTIES = ("time-pos", "duration", "pause", "eof-reached", "track-list", "path", "chapter-list")
+
+ASPECT_PRESETS = ("4:3", "16:9", "1.85:1", "2.35:1")
+ROTATE_STEPS = (0, 90, 180, 270)
+ZOOM_MIN = -1.0
+ZOOM_MAX = 3.0
 
 
 @dataclass(frozen=True)
@@ -34,6 +39,15 @@ class Track:
     selected: bool = False
 
 
+@dataclass(frozen=True)
+class Chapter:
+    """文件内嵌章节。index 从 0 计数，time 为章节起点（秒）。"""
+
+    index: int
+    title: str = ""
+    time: float = 0.0
+
+
 class PlaybackError(RuntimeError):
     pass
 
@@ -46,6 +60,7 @@ class Playback(QObject):
     paused_changed = Signal(bool)
     file_changed = Signal(str)
     tracks_changed = Signal()
+    chapters_changed = Signal()
     end_reached = Signal()
 
     def __init__(self, parent: QObject | None = None, video_out: str = "libmpv"):
@@ -59,6 +74,7 @@ class Playback(QObject):
         self._mpv_module = mpv_module
         self._eof = False
         self._tracks: list[Track] = []
+        self._chapters: list[Chapter] = []
         try:
             self._mpv = mpv_module.MPV(
                 vo=video_out,  # libmpv=画面交给渲染上下文；null 供无渲染测试
@@ -81,6 +97,7 @@ class Playback(QObject):
         self._mpv.observe_property("eof-reached", self._on_eof)
         self._mpv.observe_property("track-list", self._on_track_list)
         self._mpv.observe_property("path", self._on_path)
+        self._mpv.observe_property("chapter-list", self._on_chapter_list)
 
     # ---- 生命周期 ----
 
@@ -147,18 +164,44 @@ class Playback(QObject):
         if value:
             self.file_changed.emit(value)
 
+    def _on_chapter_list(self, _name: str, value) -> None:
+        chapters: list[Chapter] = []
+        for index, entry in enumerate(value or []):
+            if not isinstance(entry, dict):
+                continue
+            try:
+                time = float(entry.get("time") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            chapters.append(Chapter(index=index, title=str(entry.get("title") or ""), time=time))
+        self._chapters = chapters
+        self.chapters_changed.emit()
+
     # ---- 加载与基础控制 ----
 
     def _alive(self) -> bool:
         return self._mpv is not None
 
     def load(self, path: Path) -> None:
-        """加载文件并开始播放。"""
+        """加载文件并开始播放；换文件时清掉画面/同步类调整（策略见 README）。"""
         if not self._alive():
             return
         self._eof = False
         self._mpv.command("loadfile", str(path), "replace")
+        self._reset_per_file_props()
         self._set_prop("pause", False)
+
+    def _reset_per_file_props(self) -> None:
+        for name, value in (
+            ("sub-delay", 0.0),
+            ("audio-delay", 0.0),
+            ("ab-loop-a", "no"),
+            ("ab-loop-b", "no"),
+            ("video-zoom", 0.0),
+            ("video-rotate", 0),
+            ("video-aspect-override", "no"),
+        ):
+            self._set_prop(name, value)
 
     def stop(self) -> None:
         if self._alive():
@@ -246,6 +289,88 @@ class Playback(QObject):
         """恢复 mpv 对内置字幕轨的自动选择。"""
         self._set_prop("sid", "auto")
 
+    # ---- 截图 ----
+
+    def screenshot_to_file(self, path: Path) -> bool:
+        """把当前帧（含叠显字幕）写入 PNG；无画面或渲染失败时返回 False。"""
+        if not self._alive():
+            return False
+        try:
+            self._mpv.command("screenshot-to-file", str(path))
+            return True
+        except Exception:
+            return False
+
+    # ---- 音画同步 ----
+
+    def sub_delay(self) -> float:
+        """字幕相对播放位置的偏移（秒，正=延后）。"""
+        return self._float_prop("sub-delay")
+
+    def set_sub_delay(self, seconds: float) -> None:
+        self._set_prop("sub-delay", round(float(seconds), 3))
+
+    def audio_delay(self) -> float:
+        """音频相对视频的偏移（秒，正=音频延后）。"""
+        return self._float_prop("audio-delay")
+
+    def set_audio_delay(self, seconds: float) -> None:
+        self._set_prop("audio-delay", round(float(seconds), 3))
+
+    # ---- 画面调整 ----
+
+    def set_aspect_override(self, value: str | None) -> None:
+        """强制画面比例；None 恢复跟随视频。"""
+        self._set_prop("video-aspect-override", value if value else "no")
+
+    def video_zoom(self) -> float:
+        return self._float_prop("video-zoom")
+
+    def adjust_video_zoom(self, delta: float) -> float:
+        """在当前缩放上叠加 delta（log2 尺度），返回调整后的值。"""
+        zoom = max(ZOOM_MIN, min(ZOOM_MAX, self.video_zoom() + delta))
+        self._set_prop("video-zoom", round(zoom, 4))
+        return zoom
+
+    def reset_video_zoom(self) -> None:
+        self._set_prop("video-zoom", 0.0)
+
+    def set_video_rotate(self, degrees: int) -> None:
+        if degrees not in ROTATE_STEPS:
+            raise ValueError(f"unsupported rotation: {degrees}")
+        self._set_prop("video-rotate", degrees)
+
+    def video_size(self) -> tuple[int, int] | None:
+        width = self._int_prop("width")
+        height = self._int_prop("height")
+        if width and height:
+            return width, height
+        return None
+
+    # ---- AB 循环 ----
+
+    def set_ab_loop(self, a: float | None, b: float | None) -> None:
+        """设置 A/B 循环点；两点齐全后由 mpv 自动往复。None 表示清除。"""
+        self._set_prop("ab-loop-a", "no" if a is None else round(float(a), 3))
+        self._set_prop("ab-loop-b", "no" if b is None else round(float(b), 3))
+
+    def ab_loop(self) -> tuple[float | None, float | None]:
+        return self._time_or_none(self._get_prop("ab-loop-a")), self._time_or_none(
+            self._get_prop("ab-loop-b")
+        )
+
+    # ---- 章节 ----
+
+    def chapters(self) -> list[Chapter]:
+        return list(self._chapters)
+
+    def current_chapter(self) -> int | None:
+        value = self._int_prop("chapter")
+        return value if value is not None and value >= 0 else None
+
+    def select_chapter(self, index: int) -> None:
+        self._set_prop("chapter", int(index))
+
     # ---- 内部 ----
 
     def _set_prop(self, name: str, value) -> None:
@@ -254,6 +379,36 @@ class Playback(QObject):
             return
         text = "yes" if value is True else "no" if value is False else str(value)
         self._try(lambda: self._mpv.command("set", name, text))
+
+    def _get_prop(self, name: str, default=None):
+        """属性读取。走 MPV 的动态属性接口（python-mpv 的属性访问路径），
+        覆盖 chapter/width 等纯属性；选项同名属性同样可读。"""
+        if not self._alive():
+            return default
+        try:
+            return getattr(self._mpv, name.replace("-", "_"))
+        except Exception:
+            return default
+
+    def _float_prop(self, name: str) -> float:
+        value = self._get_prop(name)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _int_prop(self, name: str) -> int | None:
+        value = self._get_prop(name)
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _time_or_none(value) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return float(value)
 
     @staticmethod
     def _try(fn) -> None:

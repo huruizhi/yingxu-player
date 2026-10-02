@@ -22,6 +22,8 @@ _PATHS = {
     "close": '<path d="m6 6 12 12M18 6 6 18"/>',
     "skip": '<path d="m4 6 8 6-8 6Zm9 0 8 6-8 6Z"/>',
     "open": '<path d="M4 7a2 2 0 0 1 2-2h4l2 3h6a2 2 0 0 1 2 2v8H4Z"/><path d="M12 11v5m-2.5-2.5L12 11l2.5 2.5"/>',
+    # 画中画：外层窗口 + 右下角小画面
+    "pip": '<rect x="3" y="5" width="18" height="14" rx="2"/><rect x="11.5" y="12" width="7" height="5" rx="1" fill="currentColor" stroke="none"/>',
 }
 
 
