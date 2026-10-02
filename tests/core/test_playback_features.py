@@ -1,6 +1,7 @@
 """播放内核新增能力：截图、音画同步、画面调整、AB 循环、章节。
 
 使用 vo=null 的真实 mpv：这些能力全部是属性/命令层，不依赖渲染。
+共享模块级实例，避免在 CI 上高频创建/销毁 mpv 进程内上下文。
 """
 
 import pytest
@@ -8,9 +9,9 @@ import pytest
 from player.core.playback import Playback
 
 
-@pytest.fixture()
+@pytest.fixture(scope="module")
 def playback():
-    player = Playback(video_out="null")
+    player = Playback(video_out="null", audio_out="null")
     yield player
     player.terminate()
 
@@ -66,6 +67,6 @@ def test_screenshot_without_file_fails(playback, tmp_path):
 
 
 def test_terminate_is_idempotent():
-    player = Playback(video_out="null")
+    player = Playback(video_out="null", audio_out="null")
     player.terminate()
     player.terminate()

@@ -20,6 +20,17 @@ from player.core.libmpv import patch_find_library
 
 OBSERVED_PROPERTIES = ("time-pos", "duration", "pause", "eof-reached", "track-list", "path", "chapter-list")
 
+# 属性名 → 本类对应的回调方法名；__init__ 注册、terminate 注销共用同一份映射
+_OBSERVERS = {
+    "time-pos": "_on_time_pos",
+    "duration": "_on_duration",
+    "pause": "_on_pause",
+    "eof-reached": "_on_eof",
+    "track-list": "_on_track_list",
+    "path": "_on_path",
+    "chapter-list": "_on_chapter_list",
+}
+
 ASPECT_PRESETS = ("4:3", "16:9", "1.85:1", "2.35:1")
 ROTATE_STEPS = (0, 90, 180, 270)
 ZOOM_MIN = -1.0
@@ -63,7 +74,9 @@ class Playback(QObject):
     chapters_changed = Signal()
     end_reached = Signal()
 
-    def __init__(self, parent: QObject | None = None, video_out: str = "libmpv"):
+    def __init__(
+        self, parent: QObject | None = None, video_out: str = "libmpv", audio_out: str | None = None
+    ):
         super().__init__(parent)
         try:
             patch_find_library()  # Homebrew libmpv 不在 ctypes 默认搜索路径
@@ -75,29 +88,27 @@ class Playback(QObject):
         self._eof = False
         self._tracks: list[Track] = []
         self._chapters: list[Chapter] = []
+        options = dict(
+            vo=video_out,  # libmpv=画面交给渲染上下文；null 供无渲染测试
+            hwdec="auto-safe",  # macOS 上自动启用 VideoToolbox 硬解
+            keep_open="yes",  # 播到结尾停在最后一帧，由应用决定连播
+            stop_screensaver="yes",  # 播放视频时阻止屏幕保护程序启动
+            idle="yes",
+            osc=False,  # 使用自绘控制栏
+            audio_display="no",
+            input_vo_keyboard=False,
+            loglevel="warn",
+            log_handler=self._log,
+        )
+        if audio_out is not None:
+            options["ao"] = audio_out  # 测试环境禁用真实音频设备，避免 CI 上的资源竞争
         try:
-            self._mpv = mpv_module.MPV(
-                vo=video_out,  # libmpv=画面交给渲染上下文；null 供无渲染测试
-                hwdec="auto-safe",  # macOS 上自动启用 VideoToolbox 硬解
-                keep_open="yes",  # 播到结尾停在最后一帧，由应用决定连播
-                stop_screensaver="yes",  # 播放视频时阻止屏幕保护程序启动
-                idle="yes",
-                osc=False,  # 使用自绘控制栏
-                audio_display="no",
-                input_vo_keyboard=False,
-                loglevel="warn",
-                log_handler=self._log,
-            )
+            self._mpv = mpv_module.MPV(**options)
         except Exception as exc:
             raise PlaybackError(f"初始化 libmpv 失败：{exc}") from exc
 
-        self._mpv.observe_property("time-pos", self._on_time_pos)
-        self._mpv.observe_property("duration", self._on_duration)
-        self._mpv.observe_property("pause", self._on_pause)
-        self._mpv.observe_property("eof-reached", self._on_eof)
-        self._mpv.observe_property("track-list", self._on_track_list)
-        self._mpv.observe_property("path", self._on_path)
-        self._mpv.observe_property("chapter-list", self._on_chapter_list)
+        for name, handler_name in _OBSERVERS.items():
+            self._mpv.observe_property(name, getattr(self, handler_name))
 
     # ---- 生命周期 ----
 
@@ -107,11 +118,20 @@ class Playback(QObject):
         return self._mpv
 
     def terminate(self) -> None:
-        """销毁 mpv 句柄；幂等，重复调用安全。"""
+        """销毁 mpv 句柄；幂等，重复调用安全。
+
+        先注销全部属性观察器再 terminate：mpv 销毁期间事件线程仍可能投递
+        属性事件，回调进入已进入销毁流程的实例会放大底层库的销毁竞争。
+        """
         mpv = getattr(self, "_mpv", None)
         self._mpv = None
         if mpv is None:
             return
+        for name, handler_name in _OBSERVERS.items():
+            try:
+                mpv.unobserve_property(name, getattr(self, handler_name))
+            except Exception:
+                pass
         try:
             mpv.terminate()
         except Exception:

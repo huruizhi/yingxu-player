@@ -23,7 +23,7 @@ pytestmark = pytest.mark.usefixtures("qapp")
 def window(tmp_path):
     settings = Settings(subtitle_source=SubtitleSource.OFF)
     store = Store(tmp_path / "state.json")
-    playback = Playback(video_out="null")  # 离屏测试无渲染上下文，用 null 视频输出
+    playback = Playback(video_out="null", audio_out="null")  # 离屏测试无渲染与音频设备
     win = MainWindow(settings, store, tmp_path / "sub_cache", playback=playback)
     yield win
     try:
