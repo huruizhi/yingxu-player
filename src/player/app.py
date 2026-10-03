@@ -25,7 +25,7 @@ from PySide6.QtGui import QSurfaceFormat
 from PySide6.QtWidgets import QApplication
 
 from player.core.libmpv import patch_find_library
-from player.core.settings import Settings
+from player.core.settings import Settings, SubtitleSource
 from player.core.store import Store
 from player.single_instance import SingleInstance
 from player.ui.main_window import MainWindow
@@ -139,6 +139,7 @@ def main() -> int:
         tmp = Path(tempfile.mkdtemp(prefix="player_smoke_"))
         settings = Settings(
             file_path=tmp / "settings.json",
+            subtitle_source=SubtitleSource.FORCE_AI,  # smoke 的目的就是验证 AI 全链路
             ai_model=os.environ.get("PLAYER_SMOKE_MODEL", "tiny"),
         )
         settings_path, store_path, subtitle_cache = (

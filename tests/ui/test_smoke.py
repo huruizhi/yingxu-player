@@ -57,6 +57,29 @@ def test_open_directory_plays_first(window, qtbot):
     window.close()
 
 
+def test_open_directory_continues_from_last_episode(window, qtbot):
+    # 自然排序第一是 plain.mkv；上次看到的是 speech.mp4 → 应从它继续
+    window.store.set_last_episode(MEDIA / "speech.mp4")
+    window.open_path(MEDIA)
+    assert window._current_file == MEDIA / "speech.mp4"
+    window.close()
+
+
+def test_open_directory_advances_after_finishing(window, qtbot):
+    # speech.mp4 已播到结尾附近 → 打开目录顺延到下一集 test_with_subs.mkv
+    window.store.set_progress(MEDIA / "speech.mp4", position=11.5, duration=12.0)
+    window.store.set_last_episode(MEDIA / "speech.mp4")
+    window.open_path(MEDIA)
+    assert window._current_file == MEDIA / "test_with_subs.mkv"
+    window.close()
+
+
+def test_open_directory_falls_back_to_first_when_record_missing(window, qtbot):
+    window.open_path(MEDIA)
+    assert window._current_file == MEDIA / "plain.mkv"  # 无续播记录 → 第一集
+    window.close()
+
+
 def test_recent_directory_shortcut_opens_saved_directory(window, monkeypatch):
     window.settings.remember_directory(MEDIA)
     window._refresh_recent_directories()

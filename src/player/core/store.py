@@ -21,6 +21,7 @@ class Store:
         self._progress: dict[str, dict] = data.get("progress", {})
         self._credits_files: dict[str, float] = data.get("credits_files", {})
         self._credits_dirs: dict[str, float] = data.get("credits_dirs", {})
+        self._last_episodes: dict[str, str] = data.get("last_episodes", {})
 
     # ---- 播放进度 ----
 
@@ -54,6 +55,29 @@ class Store:
             return
         for key in list(self._progress)[: len(self._progress) - 500]:
             del self._progress[key]
+
+    def is_finished(self, path: Path) -> bool:
+        """文件已播到结尾附近（打开目录续播时据此顺延下一集）。"""
+        entry = self._progress.get(self._key(path))
+        if not entry:
+            return False
+        position, duration = entry.get("position", 0.0), entry.get("duration", 0.0)
+        return duration > 0 and position >= duration - 5.0
+
+    # ---- 每目录续播 ----
+
+    def set_last_episode(self, file: Path) -> None:
+        """记录该文件所在目录最近播放到的文件；打开目录时据此继续。
+
+        立即落盘：换集是离散的关键节点，崩溃后也应能回到正在看的这集。
+        """
+        resolved = Path(file).resolve()
+        self._last_episodes[str(resolved.parent)] = str(resolved)
+        self.save()
+
+    def get_last_episode(self, directory: Path) -> Path | None:
+        value = self._last_episodes.get(str(Path(directory).resolve()))
+        return Path(value) if value else None
 
     # ---- 片尾标记 ----
 
@@ -97,6 +121,7 @@ class Store:
                 "progress": self._progress,
                 "credits_files": self._credits_files,
                 "credits_dirs": self._credits_dirs,
+                "last_episodes": self._last_episodes,
             },
         )
 

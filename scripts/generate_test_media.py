@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import tempfile
-import os
 from pathlib import Path
 
 OUTPUT = Path(
-    os.environ.get("YINGXU_TEST_MEDIA_DIR", str(Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "media"))
+    os.environ.get(
+        "YINGXU_TEST_MEDIA_DIR", str(Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "media")
+    )
 )
 
 
@@ -27,7 +29,9 @@ def main() -> None:
     _generate_if_missing(
         OUTPUT / "speech.mp4", "-f", "lavfi", "-i", video, "-t", "12", "-an", "-c:v", "mpeg4", "-q:v", "5"
     )
-    _generate_if_missing(OUTPUT / "plain.mkv", "-f", "lavfi", "-i", video, "-f", "lavfi", "-i", audio, *common)
+    _generate_if_missing(
+        OUTPUT / "plain.mkv", "-f", "lavfi", "-i", video, "-f", "lavfi", "-i", audio, *common
+    )
 
     subtitle_target = OUTPUT / "test_with_subs.mkv"
     if not subtitle_target.exists():

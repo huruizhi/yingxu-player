@@ -38,7 +38,9 @@ def main() -> int:
     started = time.monotonic()
     segments = backend.transcribe(pcm)
     elapsed = time.monotonic() - started
-    print(f"[ai-smoke] 转写耗时 {elapsed:.2f}s（音频 {duration:.2f}s → 实时率 {elapsed / max(duration, 0.01):.2f}x）")
+    print(
+        f"[ai-smoke] 转写耗时 {elapsed:.2f}s（音频 {duration:.2f}s → 实时率 {elapsed / max(duration, 0.01):.2f}x）"
+    )
     for seg in segments:
         print(f"  [{seg.start:7.2f} → {seg.end:7.2f}] {seg.text}")
     decoder.close()

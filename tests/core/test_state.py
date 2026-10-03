@@ -32,7 +32,7 @@ class TestStorage:
 class TestSettings:
     def test_defaults(self):
         s = Settings()
-        assert s.subtitle_source is SubtitleSource.AUTO
+        assert s.subtitle_source is SubtitleSource.OFF
         assert s.ai_model == "small"
         assert s.skip_credits_enabled is False
         assert s.volume == 60
@@ -59,10 +59,31 @@ class TestSettings:
         assert s.volume == 130
         assert s.speed == 1.0
 
-    def test_subtitle_source_invalid_falls_back_to_auto(self, tmp_path):
+    def test_subtitle_source_invalid_falls_back_to_off(self, tmp_path):
         path = tmp_path / "settings.json"
         save_json_atomic(path, {"subtitle_source": "????"})
+        assert Settings.load(path).subtitle_source is SubtitleSource.OFF
+
+    def test_legacy_auto_default_migrates_to_off_once(self, tmp_path):
+        path = tmp_path / "settings.json"
+        save_json_atomic(path, {"subtitle_source": "auto"})
+        migrated = Settings.load(path)
+        assert migrated.subtitle_source is SubtitleSource.OFF
+        assert migrated.ai_default_migrated is True
+        migrated.save()
+        assert Settings.load(path).subtitle_source is SubtitleSource.OFF  # 迁移结果持久化
+
+    def test_deliberate_auto_survives_migration(self, tmp_path):
+        path = tmp_path / "settings.json"
+        save_json_atomic(path, {"subtitle_source": "auto", "ai_default_migrated": True})
         assert Settings.load(path).subtitle_source is SubtitleSource.AUTO
+
+    def test_force_ai_and_off_not_migrated(self, tmp_path):
+        path = tmp_path / "settings.json"
+        save_json_atomic(path, {"subtitle_source": "force_ai"})
+        loaded = Settings.load(path)
+        assert loaded.subtitle_source is SubtitleSource.FORCE_AI
+        assert loaded.ai_default_migrated is False
 
     def test_recent_directories_round_trip_and_order(self, tmp_path):
         path = tmp_path / "settings.json"
@@ -106,6 +127,34 @@ class TestStoreProgress:
         store = Store(tmp_path / "state.json")
         store.set_progress(media, position=40.0, duration=50.0)
         assert store.get_progress(media) is None
+
+    def test_is_finished_near_end(self, media, tmp_path):
+        store = Store(tmp_path / "state.json")
+        store.set_progress(media, position=1797.0, duration=1800.0)
+        assert store.is_finished(media) is True
+        store.set_progress(media, position=1000.0, duration=1800.0)
+        assert store.is_finished(media) is False
+        assert store.is_finished(tmp_path / "never_played.mkv") is False
+
+
+class TestStoreLastEpisode:
+    def test_round_trip_and_persistence(self, tmp_path):
+        path = tmp_path / "state.json"
+        store = Store(path)
+        episode = tmp_path / "show" / "EP05.mkv"
+        store.set_last_episode(episode)
+        assert store.get_last_episode(episode.parent) == episode.resolve()
+        reloaded = Store(path)
+        assert reloaded.get_last_episode(episode.parent) == episode.resolve()
+
+    def test_latest_episode_wins(self, tmp_path):
+        store = Store(tmp_path / "state.json")
+        store.set_last_episode(tmp_path / "EP01.mkv")
+        store.set_last_episode(tmp_path / "EP02.mkv")
+        assert store.get_last_episode(tmp_path) == (tmp_path / "EP02.mkv").resolve()
+
+    def test_unknown_directory_returns_none(self, tmp_path):
+        assert Store(tmp_path / "state.json").get_last_episode(tmp_path / "other") is None
 
 
 class TestStoreCredits:

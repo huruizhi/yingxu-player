@@ -16,7 +16,7 @@ from PySide6.QtGui import QSurfaceFormat
 from PySide6.QtWidgets import QApplication
 
 from player.core.libmpv import patch_find_library
-from player.core.settings import Settings
+from player.core.settings import Settings, SubtitleSource
 from player.core.store import Store
 from player.ui.main_window import MainWindow
 from player.ui.theme import apply_dark_theme
@@ -40,7 +40,11 @@ def main() -> int:
     apply_dark_theme(app)
 
     tmp = Path(tempfile.mkdtemp(prefix="player_smoke_"))
-    settings = Settings(file_path=tmp / "settings.json", ai_model=model_size)
+    settings = Settings(
+        file_path=tmp / "settings.json",
+        subtitle_source=SubtitleSource.FORCE_AI,  # 真机冒烟需要验证 AI 字幕链路
+        ai_model=model_size,
+    )
     store = Store(tmp / "state.json")
     win = MainWindow(settings, store, tmp / "subs")
     win.transcriber_status.connect(lambda text: print(f"SMOKE: [transcriber] {text}"))

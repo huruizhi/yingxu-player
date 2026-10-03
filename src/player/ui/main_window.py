@@ -543,17 +543,18 @@ class MainWindow(QMainWindow):
     # ================= 打开与播放 =================
 
     def open_path(self, path: Path) -> None:
-        """打开文件或目录：文件自动带起同目录播放列表。"""
+        """打开文件或目录：文件自动带起同目录播放列表；目录从上次看到的剧集继续。"""
         path = Path(path).expanduser()
         if path.is_dir():
             files = scan_media_files(path)
             if not files:
                 self.video_area.show_osd("该目录没有可播放的媒体文件")
                 return
-            self.playlist.load_directory(path)
+            start = self._directory_start_episode(path, files)
+            self.playlist.load_directory(path, start_file=start)
             self._refresh_playlist_panel()
             self._remember_directory(path)
-            self.play_path(files[0])
+            self.play_path(start)
             return
         if not path.is_file():
             self.video_area.show_osd(f"文件不存在：{path}")
@@ -588,11 +589,26 @@ class MainWindow(QMainWindow):
         self.settings.save()
         self._refresh_recent_directories()
 
+    def _directory_start_episode(self, directory: Path, files: list[Path]) -> Path:
+        """打开目录时的起始剧集：上次播放的文件；已看完则顺延下一集，末集看完则原样重播。"""
+        last = self.store.get_last_episode(directory)
+        if last is None:
+            return files[0]
+        resolved = [item.resolve() for item in files]
+        try:
+            index = resolved.index(last.resolve())
+        except ValueError:
+            return files[0]  # 记录的文件已被移动/删除，回到第一集
+        if not self.store.is_finished(files[index]):
+            return files[index]
+        return files[index + 1] if index + 1 < len(files) else files[index]
+
     def play_path(self, path: Path) -> None:
         path = Path(path)
         self._stop_transcriber()
         self._save_progress_now()
         self._current_file = path
+        self.store.set_last_episode(path)  # 打开所在目录时从这集继续
         self._ai_override = None
         self._reset_per_file_adjustments()
         self._pending_resume = self.store.get_progress(path)

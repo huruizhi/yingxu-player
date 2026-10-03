@@ -19,7 +19,7 @@ class SubtitleSource(StrEnum):
 
     @classmethod
     def _missing_(cls, value):
-        return cls.AUTO
+        return cls.OFF
 
 
 AI_MODELS = ("tiny", "base", "small", "medium")
@@ -29,7 +29,7 @@ MAX_RECENT_DIRECTORIES = 8
 
 @dataclass
 class Settings:
-    subtitle_source: SubtitleSource = SubtitleSource.AUTO
+    subtitle_source: SubtitleSource = SubtitleSource.OFF  # AI 字幕默认不开启，需用户手动启用
     ai_model: str = "small"
     ai_language: str = "auto"
     skip_credits_enabled: bool = False
@@ -38,6 +38,7 @@ class Settings:
     playlist_mode: str = "all"  # LoopMode 的值
     recent_directories: list[str] = field(default_factory=list)
     window: dict = field(default_factory=dict)  # 窗口几何 {x,y,w,h,maximized}
+    ai_default_migrated: bool = False  # 旧版默认 auto 的配置是否已一次性迁移为 off
     file_path: Path | None = None  # 持久化位置；None 表示不落盘（测试/临时）
 
     def __post_init__(self):
@@ -74,6 +75,11 @@ class Settings:
         known = {f.name for f in fields(cls)}
         settings = cls(**{k: v for k, v in data.items() if k in known})
         settings.file_path = Path(path)
+        if not settings.ai_default_migrated and data.get("subtitle_source") == SubtitleSource.AUTO.value:
+            # 0.3.1 及之前版本的默认值是 auto。未主动改过的旧配置一次性迁移为
+            # off；迁移标记随下次 save 落盘，之后用户手选 auto 不再被重置
+            settings.subtitle_source = SubtitleSource.OFF
+            settings.ai_default_migrated = True
         return settings
 
     def save(self, path: Path | None = None) -> None:
